@@ -82,7 +82,7 @@ const server = http.createServer((req, res) => {
   // Socket.io обрабатывает свои маршруты сам — пропускаем
   if (urlPath.startsWith('/socket.io')) return;
 
-  const rootDir = 'C:\\Projects\\mark-os';
+  const rootDir = __dirname;
   let filePath = path.join(rootDir, 'public',
     urlPath === '/' ? 'index.html' : urlPath
   );
