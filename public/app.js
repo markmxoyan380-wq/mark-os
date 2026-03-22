@@ -1,1162 +1,865 @@
 /**
- * ============================================================
- * MARK OS — Frontend Engine
- * ============================================================
- * Архитектура:
- *   1. StateManager  — Redux-подобный менеджер состояния
- *   2. SocketEngine  — обёртка над Socket.io клиентом
- *   3. UIComponents  — рендер-функции компонентов
- *   4. AppController — точка входа, связывает всё вместе
- * ============================================================
+ * MARK OS — Frontend Engine v2.0
+ * Блоки: StateManager, SocketEngine, UI, AppController
  */
 
 // ============================================================
-//  БЛОК 1: STATE MANAGER — аналог Redux на чистом JS
+//  STATE MANAGER
 // ============================================================
+function createStateManager(init) {
+  let state = { ...init };
+  const subs = [];
 
-/**
- * Фабрика создания StateManager.
- * Хранит всё состояние приложения в одном месте.
- * Подписчики оповещаются только если изменился нужный срез.
- *
- * @param {Object} initialState — начальное состояние
- * @returns {Object} — { getState, dispatch, subscribe }
- */
-function createStateManager(initialState) {
-  let state = { ...initialState };
-  // Массив подписчиков: { key: string|null, handler: fn }
-  const subscribers = [];
+  function getState(key) { return key ? state[key] : state; }
 
-  /**
-   * Возвращает текущее состояние или его срез.
-   * @param {string?} key — ключ среза (если не указан — всё состояние)
-   */
-  function getState(key) {
-    return key ? state[key] : state;
-  }
-
-  /**
-   * Обновляет состояние и уведомляет подписчиков.
-   * @param {string} key    — ключ обновляемого среза
-   * @param {*} updater     — новое значение или функция (prevVal) => newVal
-   */
   function dispatch(key, updater) {
-    const prevVal = state[key];
-    const newVal  = typeof updater === 'function' ? updater(prevVal) : updater;
-
-    // Shallow comparison — не обновляем если ничего не изменилось
-    if (prevVal === newVal) return;
-
-    state = { ...state, [key]: newVal };
-
-    // Оповещаем подписчиков этого ключа и глобальных
-    subscribers.forEach(({ key: subKey, handler }) => {
-      if (subKey === null || subKey === key) {
-        handler(newVal, prevVal, key);
-      }
-    });
+    const prev = state[key];
+    const next = typeof updater === "function" ? updater(prev) : updater;
+    if (prev === next) return;
+    state = { ...state, [key]: next };
+    subs.forEach(({ key: k, fn }) => { if (k === null || k === key) fn(next, prev, key); });
   }
 
-  /**
-   * Подписка на изменение среза состояния.
-   * @param {string|null} key   — ключ среза (null = любые изменения)
-   * @param {Function} handler  — (newVal, prevVal, key) => void
-   * @returns {Function} unsubscribe
-   */
-  function subscribe(key, handler) {
-    const entry = { key, handler };
-    subscribers.push(entry);
-    return () => {
-      const idx = subscribers.indexOf(entry);
-      if (idx !== -1) subscribers.splice(idx, 1);
-    };
+  function subscribe(key, fn) {
+    const e = { key, fn };
+    subs.push(e);
+    return () => subs.splice(subs.indexOf(e), 1);
   }
 
   return { getState, dispatch, subscribe };
 }
 
-// ─── Инициализация глобального состояния приложения ─────────
 const State = createStateManager({
-  /** Данные текущего авторизованного пользователя */
-  currentUser: null,
-
-  /** Map<roomId, Room> — все доступные комнаты */
-  rooms: new Map(),
-
-  /** Map<userId, User> — все онлайн-пользователи */
-  users: new Map(),
-
-  /** Map<roomId, Message[]> — история сообщений по комнатам */
-  messages: new Map(),
-
-  /** ID текущей активной комнаты */
-  activeRoomId: 'global',
-
-  /**
-   * Set<userId> — пользователи, набирающие текст
-   * в активной комнате
-   */
-  typingUsers: new Set(),
-
-  /** 'login' | 'chat' — экран приложения */
-  screen: 'login',
-
-  /** Статус соединения: 'connecting' | 'connected' | 'disconnected' */
-  connectionStatus: 'connecting',
-
-  /** Флаг «пользователь прокрутил вверх» */
+  currentUser:    null,
+  rooms:          new Map(),
+  users:          new Map(),
+  messages:       new Map(),
+  activeRoomId:   "global",
+  typingUsers:    new Set(),
+  screen:         "login",
+  connectionStatus: "connecting",
   userScrolledUp: false,
+  replyTo:        null,   // { id, text, author }
+  editingMsg:     null,   // { id, text }
+  theme:          "dark",
+  msgCount:       0,
 });
 
 // ============================================================
-//  БЛОК 2: SOCKET ENGINE — клиентская работа с Socket.io
+//  SOCKET ENGINE
 // ============================================================
-
-/**
- * SocketEngine — инкапсулирует все операции с сокетом.
- * Переводит сырые события в изменения State.
- */
 const SocketEngine = (function () {
   let socket = null;
 
-  /**
-   * Инициализация подключения к серверу.
-   * Вызывается один раз после ввода имени пользователя.
-   */
   function connect() {
-    // Подключаемся к тому же хосту
-    socket = io(window.location.origin, {
-      transports: ['websocket', 'polling'],
-      reconnectionDelay: 1000,
-      reconnectionAttempts: 10,
-    });
-
-    _bindEvents();
+    socket = io(window.location.origin, { transports: ["websocket", "polling"], reconnectionDelay: 1000 });
+    _bind();
     return socket;
   }
 
-  /**
-   * Привязка всех серверных событий к State.
-   * Каждый обработчик — чистая функция, обновляющая State.
-   */
-  function _bindEvents() {
-    // ── Подключение / отключение ─────────────────────────
-    socket.on('connect', () => {
-      State.dispatch('connectionStatus', 'connected');
-      UI.showToast('Соединение установлено', 'success');
+  function _bind() {
+    socket.on("connect",    () => { State.dispatch("connectionStatus", "connected"); });
+    socket.on("disconnect", () => { State.dispatch("connectionStatus", "disconnected"); UI.showToast("Соединение потеряно", "error"); });
+
+    socket.on("auth_success", ({ user, rooms, users }) => {
+      State.dispatch("currentUser", user);
+      State.dispatch("theme", user.theme || "dark");
+      const rm = new Map(); rooms.forEach(r => rm.set(r.id, r));
+      State.dispatch("rooms", rm);
+      const um = new Map(); users.forEach(u => um.set(u.id, u));
+      State.dispatch("users", um);
+      State.dispatch("screen", "chat");
+      socket.emit("join_room", { roomId: "global" });
     });
 
-    socket.on('disconnect', () => {
-      State.dispatch('connectionStatus', 'disconnected');
-      UI.showToast('Соединение потеряно. Переподключение...', 'error');
-    });
+    socket.on("auth_error", ({ message }) => UI.showToast(message, "error"));
 
-    socket.on('connect_error', () => {
-      State.dispatch('connectionStatus', 'disconnected');
-    });
-
-    // ── Успешная авторизация ─────────────────────────────
-    socket.on('auth_success', ({ user, rooms, users }) => {
-      State.dispatch('currentUser', user);
-
-      // Заполняем комнаты
-      const roomMap = new Map();
-      rooms.forEach(r => roomMap.set(r.id, r));
-      State.dispatch('rooms', roomMap);
-
-      // Заполняем пользователей
-      const userMap = new Map();
-      users.forEach(u => userMap.set(u.id, u));
-      State.dispatch('users', userMap);
-
-      // Переключаем на экран чата
-      State.dispatch('screen', 'chat');
-
-      // Запрашиваем историю глобальной комнаты
-      socket.emit('join_room', { roomId: 'global' });
-    });
-
-    socket.on('auth_error', ({ message }) => {
-      UI.showToast(message, 'error');
-    });
-
-    // ── Новое сообщение ──────────────────────────────────
-    socket.on('new_message', (message) => {
-      _addMessageToState(message);
-
-      // Звуковой пинг для DM (если не активная комната)
-      if (message.roomId !== State.getState('activeRoomId')) {
-        UI.markRoomUnread(message.roomId);
-        if (message.roomId.startsWith('dm_')) {
-          UI.playNotificationSound();
-        }
+    socket.on("new_message", (msg) => {
+      _addMsg(msg);
+      State.dispatch("msgCount", c => c + 1);
+      if (msg.roomId !== State.getState("activeRoomId")) {
+        _markUnread(msg.roomId);
+        if (msg.roomId.startsWith("dm_")) { UI.playPing(); _notify(msg); }
       }
     });
 
-    // ── История комнаты ──────────────────────────────────
-    socket.on('room_history', ({ roomId, messages }) => {
-      State.dispatch('messages', prev => {
-        const next = new Map(prev);
-        next.set(roomId, messages);
-        return next;
+    socket.on("room_history", ({ roomId, messages }) => {
+      State.dispatch("messages", prev => { const n = new Map(prev); n.set(roomId, messages); return n; });
+    });
+
+    socket.on("message_edited", ({ roomId, messageId, newText }) => {
+      State.dispatch("messages", prev => {
+        const n = new Map(prev);
+        n.set(roomId, (n.get(roomId) || []).map(m => m.id === messageId ? { ...m, text: newText, edited: true } : m));
+        return n;
       });
     });
 
-    // ── Новый пользователь вошёл ─────────────────────────
-    socket.on('user_joined', ({ user }) => {
-      State.dispatch('users', prev => {
-        const next = new Map(prev);
-        next.set(user.id, user);
-        return next;
+    socket.on("message_deleted", ({ roomId, messageId }) => {
+      State.dispatch("messages", prev => {
+        const n = new Map(prev);
+        n.set(roomId, (n.get(roomId) || []).filter(m => m.id !== messageId));
+        return n;
       });
-      UI.showToast(`${user.username} присоединился`, 'info');
     });
 
-    // ── Пользователь ушёл ────────────────────────────────
-    socket.on('user_left', ({ userId, username }) => {
-      State.dispatch('users', prev => {
-        const next = new Map(prev);
-        next.delete(userId);
-        return next;
+    socket.on("message_reacted", ({ roomId, messageId, reactions }) => {
+      State.dispatch("messages", prev => {
+        const n = new Map(prev);
+        n.set(roomId, (n.get(roomId) || []).map(m => m.id === messageId ? { ...m, reactions } : m));
+        return n;
       });
-      UI.showToast(`${username} вышел`, 'info');
     });
 
-    // ── DM создан (инициатор) ─────────────────────────────
-    socket.on('dm_ready', ({ room, history, partner }) => {
-      // Добавляем комнату в State
-      State.dispatch('rooms', prev => {
-        const next = new Map(prev);
-        next.set(room.id, room);
-        return next;
-      });
-      // Сохраняем историю
-      State.dispatch('messages', prev => {
-        const next = new Map(prev);
-        next.set(room.id, history);
-        return next;
-      });
-      // Переключаемся на DM
+    socket.on("user_joined", ({ user }) => {
+      State.dispatch("users", prev => { const n = new Map(prev); n.set(user.id, user); return n; });
+      UI.showToast(`${user.username} присоединился`, "info");
+    });
+
+    socket.on("user_left", ({ userId, username }) => {
+      State.dispatch("users", prev => { const n = new Map(prev); n.delete(userId); return n; });
+      UI.showToast(`${username} вышел`, "info");
+    });
+
+    socket.on("user_updated", ({ user }) => {
+      State.dispatch("users", prev => { const n = new Map(prev); n.set(user.id, user); return n; });
+    });
+
+    socket.on("profile_updated", ({ user }) => {
+      State.dispatch("currentUser", user);
+    });
+
+    socket.on("dm_ready", ({ room, history, partner }) => {
+      State.dispatch("rooms", prev => { const n = new Map(prev); n.set(room.id, room); return n; });
+      State.dispatch("messages", prev => { const n = new Map(prev); n.set(room.id, history); return n; });
       AppController.switchRoom(room.id);
     });
 
-    // ── Входящий DM (получатель) ─────────────────────────
-    socket.on('dm_incoming', ({ room, from }) => {
-      State.dispatch('rooms', prev => {
-        const next = new Map(prev);
-        next.set(room.id, room);
-        return next;
-      });
-      UI.showToast(`💬 Новое сообщение от ${from.username}`, 'dm');
-      UI.renderRoomList();
+    socket.on("dm_incoming", ({ room, from }) => {
+      State.dispatch("rooms", prev => { const n = new Map(prev); n.set(room.id, room); return n; });
+      UI.showToast(`💬 ${from.username} написал вам`, "dm");
+      UI.renderChatList();
     });
 
-    // ── Индикатор набора ──────────────────────────────────
-    socket.on('user_typing', ({ userId, username, roomId }) => {
-      if (roomId !== State.getState('activeRoomId')) return;
-
-      State.dispatch('typingUsers', prev => {
-        const next = new Set(prev);
-        next.add(userId);
-        return next;
-      });
-      UI.renderTypingIndicator();
+    socket.on("user_typing", ({ userId, username, roomId }) => {
+      if (roomId !== State.getState("activeRoomId")) return;
+      State.dispatch("typingUsers", prev => { const n = new Set(prev); n.add(userId); return n; });
     });
 
-    socket.on('typing_stopped', ({ userId, roomId }) => {
-      if (roomId !== State.getState('activeRoomId')) return;
-
-      State.dispatch('typingUsers', prev => {
-        const next = new Set(prev);
-        next.delete(userId);
-        return next;
-      });
-      UI.renderTypingIndicator();
+    socket.on("typing_stopped", ({ userId }) => {
+      State.dispatch("typingUsers", prev => { const n = new Set(prev); n.delete(userId); return n; });
     });
 
-    // ── Ошибки ────────────────────────────────────────────
-    socket.on('error_event', ({ message }) => {
-      UI.showToast(message, 'error');
-    });
+    socket.on("error_event",      ({ message }) => UI.showToast(message, "error"));
+    socket.on("permission_denied",({ message }) => UI.showToast("🚫 " + message, "error"));
+    socket.on("pong_server",      ({ ts })      => UI.updateLatency(Date.now() - ts));
+  }
 
-    socket.on('permission_denied', ({ message }) => {
-      UI.showToast('🚫 ' + message, 'error');
-    });
-
-    socket.on('pong_server', ({ ts }) => {
-      const latency = Date.now() - ts;
-      UI.updateLatency(latency);
+  function _addMsg(msg) {
+    State.dispatch("messages", prev => {
+      const n = new Map(prev);
+      const list = [...(n.get(msg.roomId) || []), msg].slice(-500);
+      n.set(msg.roomId, list);
+      return n;
     });
   }
 
-  /**
-   * Добавляет сообщение в Map сообщений State.
-   * Поддерживает кольцевой буфер (макс. 500 на фронте).
-   * @param {Object} message
-   */
-  function _addMessageToState(message) {
-    State.dispatch('messages', prev => {
-      const next = new Map(prev);
-      const list = next.get(message.roomId) || [];
-      const newList = [...list, message];
-      // Обрезаем если слишком длинно
-      next.set(message.roomId, newList.slice(-500));
-      return next;
-    });
+  function _markUnread(roomId) {
+    const rooms = State.getState("rooms");
+    const room  = rooms.get(roomId);
+    if (room) { room._unread = (room._unread || 0) + 1; UI.renderChatList(); }
   }
 
-  /** Отправка авторизации */
-  function auth(username) {
-    if (!socket) return;
-    socket.emit('auth', { username });
+  function _notify(msg) {
+    if (!("Notification" in window) || Notification.permission !== "granted") return;
+    new Notification(`MARK OS — ${msg.author}`, { body: msg.text || "📎 Медиа", icon: "/favicon.ico" });
   }
 
-  /** Отправка сообщения */
-  function sendMessage(roomId, text, meta) {
-    if (!socket) return;
-    socket.emit('send_message', { roomId, text, mediaUrl: meta?.mediaUrl, mediaType: meta?.mediaType });
-  }
+  function auth(username)                        { socket?.emit("auth", { username }); }
+  function sendMessage(roomId, text, meta)        { socket?.emit("send_message", { roomId, text, mediaUrl: meta?.mediaUrl || null, mediaType: meta?.mediaType || null, replyToId: meta?.replyToId || null }); }
+  function editMessage(roomId, messageId, text)   { socket?.emit("edit_message", { roomId, messageId, newText: text }); }
+  function deleteMessage(roomId, messageId)        { socket?.emit("delete_message", { roomId, messageId }); }
+  function reactMessage(roomId, messageId, emoji)  { socket?.emit("react_message", { roomId, messageId, emoji }); }
+  function joinRoom(roomId)                        { socket?.emit("join_room", { roomId }); }
+  function openDM(targetUserId)                    { socket?.emit("open_dm", { targetUserId }); }
+  function typingStart(roomId)                     { socket?.emit("typing_start", { roomId }); }
+  function typingStop(roomId)                      { socket?.emit("typing_stop", { roomId }); }
+  function ping()                                  { socket?.emit("ping_server"); }
+  function updateProfile(data)                     { socket?.emit("update_profile", data); }
 
-  /** Переключение комнаты */
-  function joinRoom(roomId) {
-    if (!socket) return;
-    socket.emit('join_room', { roomId });
-  }
-
-  /** Открытие DM */
-  function openDM(targetUserId) {
-    if (!socket) return;
-    socket.emit('open_dm', { targetUserId });
-  }
-
-  /** Начало набора */
-  function typingStart(roomId) {
-    if (!socket) return;
-    socket.emit('typing_start', { roomId });
-  }
-
-  /** Конец набора */
-  function typingStop(roomId) {
-    if (!socket) return;
-    socket.emit('typing_stop', { roomId });
-  }
-
-  /** Пинг-измерение задержки */
-  function ping() {
-    if (!socket) return;
-    socket.emit('ping_server');
-  }
-
-  return { connect, auth, sendMessage, joinRoom, openDM, typingStart, typingStop, ping };
+  return { connect, auth, sendMessage, editMessage, deleteMessage, reactMessage, joinRoom, openDM, typingStart, typingStop, ping, updateProfile };
 })();
 
 // ============================================================
-//  БЛОК 3: UI COMPONENTS — рендер-функции
+//  UI
 // ============================================================
-
-/**
- * UI — модуль всех операций с DOM.
- * Все методы работают через документ-кэш элементов.
- * Никаких innerHTML в циклах — только точечные обновления.
- */
 const UI = (function () {
-  // ─── Кэш DOM-элементов ───────────────────────────────────
   const $ = {};
 
-  /** Инициализация кэша после загрузки DOM */
   function init() {
-    $.loginScreen    = document.getElementById('login-screen');
-    $.chatScreen     = document.getElementById('chat-screen');
-    $.usernameInput  = document.getElementById('username-input');
-    $.loginBtn       = document.getElementById('login-btn');
-    $.chatList       = document.getElementById('chat-list');
-    $.userList       = document.getElementById('user-list');
-    $.messageList    = document.getElementById('message-list');
-    $.messageInput   = document.getElementById('message-input');
-    $.sendBtn        = document.getElementById('send-btn');
-    $.chatHeaderTitle = document.getElementById('chat-header-title');
-    $.chatHeaderStatus = document.getElementById('chat-header-status');
-    $.chatHeaderAvatar = document.getElementById('chat-header-avatar');
-    $.typingIndicator = document.getElementById('typing-indicator');
-    $.toastContainer = document.getElementById('toast-container');
-    $.onlineCount    = document.getElementById('online-count');
-    $.channelBadge   = document.getElementById('channel-badge');
-    $.activeChat     = document.getElementById('active-chat');
-    $.emptyState     = document.getElementById('empty-state');
-    $.leftPanel      = document.getElementById('left-panel');
-    $.rightPanel     = document.getElementById('right-panel');
-    $.backBtn        = document.getElementById('back-btn');
-    $.attachBtn      = document.getElementById('attach-btn');
-    $.fileInput      = document.getElementById('file-input');
+    $.loginScreen   = document.getElementById("login-screen");
+    $.chatScreen    = document.getElementById("chat-screen");
+    $.usernameInput = document.getElementById("username-input");
+    $.loginBtn      = document.getElementById("login-btn");
+    $.chatList      = document.getElementById("chat-list");
+    $.userList      = document.getElementById("user-list");
+    $.messageList   = document.getElementById("message-list");
+    $.messageInput  = document.getElementById("message-input");
+    $.sendBtn       = document.getElementById("send-btn");
+    $.headerTitle   = document.getElementById("chat-header-title");
+    $.headerStatus  = document.getElementById("chat-header-status");
+    $.headerAvatar  = document.getElementById("chat-header-avatar");
+    $.typingEl      = document.getElementById("typing-indicator");
+    $.toastBox      = document.getElementById("toast-container");
+    $.onlineCount   = document.getElementById("online-count");
+    $.channelBadge  = document.getElementById("channel-badge");
+    $.activeChat    = document.getElementById("active-chat");
+    $.emptyState    = document.getElementById("empty-state");
+    $.leftPanel     = document.getElementById("left-panel");
+    $.rightPanel    = document.getElementById("right-panel");
+    $.backBtn       = document.getElementById("back-btn");
+    $.attachBtn     = document.getElementById("attach-btn");
+    $.fileInput     = document.getElementById("file-input");
+    $.replyBar      = document.getElementById("reply-bar");
+    $.replyText     = document.getElementById("reply-text");
+    $.replyCancel   = document.getElementById("reply-cancel");
+    $.editBar       = document.getElementById("edit-bar");
+    $.editText      = document.getElementById("edit-text");
+    $.editCancel    = document.getElementById("edit-cancel");
+    $.profileModal  = document.getElementById("profile-modal");
+    $.contextMenu   = document.getElementById("context-menu");
+    $.searchInput   = document.getElementById("search-input");
+    $.themeToggle   = document.getElementById("theme-toggle");
+    $.latencyEl     = document.getElementById("latency-display");
+    $.profileAvatar = document.getElementById("profile-avatar");
+    $.profileName   = document.getElementById("profile-name");
+    $.profileRole   = document.getElementById("profile-role");
+    $.profileBioInput = document.getElementById("profile-bio-input");
+    $.profileSaveBtn  = document.getElementById("profile-save-btn");
+    $.profileMsgCount = document.getElementById("profile-msg-count");
 
-    _bindScrollListener();
-    _bindInputListeners();
-    _bindMobileNav();
+    _bindScroll();
+    _bindInput();
+    _bindActions();
   }
 
-  /**
-   * Переключение между экранами login / chat.
-   */
+  // ── ЭКРАНЫ ─────────────────────────────────────────────────
   function switchScreen(screen) {
-    if (screen === 'chat') {
-      $.loginScreen.classList.add('hidden');
-      $.chatScreen.classList.remove('hidden');
-      $.chatScreen.classList.add('fade-in');
+    if (screen === "chat") {
+      $.loginScreen.classList.add("hidden");
+      $.chatScreen.classList.remove("hidden");
     } else {
-      $.loginScreen.classList.remove('hidden');
-      $.chatScreen.classList.add('hidden');
+      $.loginScreen.classList.remove("hidden");
+      $.chatScreen.classList.add("hidden");
     }
   }
 
-  /**
-   * Рендер списка комнат в сайдбаре.
-   * Группирует по типу: global → channels → dm.
-   */
-  function renderRoomList() {
-    const rooms        = State.getState('rooms');
-    const allMessages  = State.getState('messages');
-    const activeRoomId = State.getState('activeRoomId');
+  // ── ТЕМА ───────────────────────────────────────────────────
+  function applyTheme(theme) {
+    document.body.classList.toggle("light-theme", theme === "light");
+    if ($.themeToggle) $.themeToggle.textContent = theme === "light" ? "🌙" : "☀️";
+  }
+
+  // ── СПИСОК ЧАТОВ ───────────────────────────────────────────
+  function renderChatList() {
+    const rooms        = State.getState("rooms");
+    const allMessages  = State.getState("messages");
+    const activeRoomId = State.getState("activeRoomId");
+    const query        = ($.searchInput?.value || "").toLowerCase();
     if (!$.chatList) return;
-    $.chatList.innerHTML = '';
+    $.chatList.innerHTML = "";
 
     const sections = [
-      { type: 'global',  label: 'Основное'  },
-      { type: 'channel', label: 'Каналы'    },
-      { type: 'dm',      label: 'Переписки' },
+      { type: "global",  label: "Основное"  },
+      { type: "channel", label: "Каналы"    },
+      { type: "dm",      label: "Переписки" },
     ];
 
     sections.forEach(({ type, label }) => {
-      const filtered = [];
-      rooms.forEach(r => { if (r.type === type) filtered.push(r); });
+      const list = [];
+      rooms.forEach(r => { if (r.type === type) list.push(r); });
+      const filtered = query ? list.filter(r => r.name.toLowerCase().includes(query)) : list;
       if (!filtered.length) return;
 
-      const lbl = document.createElement('div');
-      lbl.className = 'chat-section-label';
+      const lbl = document.createElement("div");
+      lbl.className = "chat-section-label";
       lbl.textContent = label;
       $.chatList.appendChild(lbl);
 
       filtered.forEach(room => {
         const msgs    = allMessages.get(room.id) || [];
         const lastMsg = msgs[msgs.length - 1];
-        const preview = lastMsg
-          ? (lastMsg.author + ': ' + lastMsg.text).slice(0, 48)
-          : 'Нет сообщений';
-        const timeStr = lastMsg ? formatTime(lastMsg.timestamp) : '';
+        const preview = lastMsg ? `${lastMsg.author}: ${lastMsg.text || "📎"}`.slice(0, 50) : "Нет сообщений";
+        const timeStr = lastMsg ? _fmtTime(lastMsg.timestamp) : "";
+        const icon    = room.type === "global" ? "🌐" : room.type === "channel" ? "📢" : "💬";
 
-        const icon = room.type === 'global'  ? '🌐'
-                   : room.type === 'channel' ? '📢' : '💬';
-
-        const el = document.createElement('div');
-        el.className = 'chat-item' + (room.id === activeRoomId ? ' active' : '');
+        const el = document.createElement("div");
+        el.className = "chat-item" + (room.id === activeRoomId ? " active" : "");
         el.innerHTML = `
-          <div class="chat-item-avatar" style="background:${stringToColor(room.name)}">
-            ${icon}
-          </div>
+          <div class="chat-item-avatar" style="background:${_color(room.name)}">${icon}</div>
           <div class="chat-item-body">
             <div class="chat-item-top">
-              <span class="chat-item-name">${escapeHTML(room.name)}</span>
+              <span class="chat-item-name">${_esc(room.name)}</span>
               <span class="chat-item-time">${timeStr}</span>
             </div>
-            <div class="chat-item-preview ${room._unread ? 'unread' : ''}">${escapeHTML(preview)}</div>
+            <div class="chat-item-preview ${room._unread ? "unread" : ""}">${_esc(preview)}</div>
           </div>
-          ${room._unread ? '<div class="chat-item-badge">•</div>' : ''}
+          ${room._unread ? `<div class="chat-item-badge">${room._unread}</div>` : ""}
         `;
-        el.addEventListener('click', () => AppController.switchRoom(room.id));
+        el.addEventListener("click", () => AppController.switchRoom(room.id));
         $.chatList.appendChild(el);
       });
     });
   }
 
-  /**
-   * Рендер списка онлайн-пользователей.
-   */
+  // ── СПИСОК ПОЛЬЗОВАТЕЛЕЙ ───────────────────────────────────
   function renderUserList() {
-    const users       = State.getState('users');
-    const currentUser = State.getState('currentUser');
+    const users = State.getState("users");
+    const me    = State.getState("currentUser");
     if (!$.userList) return;
-    $.userList.innerHTML = '';
+    $.userList.innerHTML = "";
     if ($.onlineCount) $.onlineCount.textContent = users.size;
 
     users.forEach(user => {
-      const isMe = currentUser && user.id === currentUser.id;
-      const el   = document.createElement('div');
-      el.className = 'user-item';
-
+      const isMe = me && user.id === me.id;
+      const el   = document.createElement("div");
+      el.className = "user-item";
       el.innerHTML = `
-        <div class="user-av" style="background:${stringToColor(user.username)}">
-          ${escapeHTML(user.avatar || user.username.slice(0,2).toUpperCase())}
-        </div>
+        <div class="user-av" style="background:${user.avatarColor || _color(user.username)}">${_esc(user.avatar)}</div>
         <div class="user-info">
-          <div class="user-name">${escapeHTML(user.username)}${isMe ? ' <span style="color:var(--text-3)">(ты)</span>' : ''}</div>
-          ${user.isAdmin ? '<div class="admin-tag">ADMIN</div>' : ''}
+          <div class="user-name">${_esc(user.username)}${isMe ? ' <span style="color:var(--text-3)">(ты)</span>' : ""}</div>
+          ${user.bio ? `<div class="user-bio">${_esc(user.bio)}</div>` : ""}
+          ${user.isAdmin ? '<div class="admin-tag">ADMIN</div>' : ""}
         </div>
         <div class="user-dot"></div>
       `;
-
       if (!isMe) {
-        el.addEventListener('click', () => { SocketEngine.openDM(user.id); });
-        el.title = 'Написать ' + user.username;
+        el.style.cursor = "pointer";
+        el.title = `Написать ${user.username}`;
+        el.addEventListener("click", () => SocketEngine.openDM(user.id));
       }
       $.userList.appendChild(el);
     });
   }
 
-  /**
-   * Рендер сообщений активной комнаты.
-   * Группирует последовательные сообщения одного автора.
-   * «Умная» прокрутка: скролл вниз только если userScrolledUp = false.
-   */
+  // ── СООБЩЕНИЯ ──────────────────────────────────────────────
   function renderMessages() {
-    const activeRoomId = State.getState('activeRoomId');
-    const allMessages  = State.getState('messages');
-    const messages     = allMessages.get(activeRoomId) || [];
-    const currentUser  = State.getState('currentUser');
+    const roomId  = State.getState("activeRoomId");
+    const msgs    = (State.getState("messages").get(roomId) || []);
+    const me      = State.getState("currentUser");
+    if (!$.messageList) return;
+    $.messageList.innerHTML = "";
 
-    $.messageList.innerHTML = '';
+    let lastAuthorId = null, lastTs = 0;
 
-    let lastAuthorId = null;
-    let lastTimestamp = 0;
+    msgs.forEach((msg, idx) => {
+      const isMe     = me && msg.authorId === me.id;
+      const sameAuth = msg.authorId === lastAuthorId;
+      const closeTs  = (msg.timestamp - lastTs) < 300000;
+      const compact  = sameAuth && closeTs;
 
-    messages.forEach((msg, idx) => {
-      const isMe      = currentUser && msg.authorId === currentUser.id;
-      // Группировка: если тот же автор и меньше 5 минут — compact
-      const sameAuthor = msg.authorId === lastAuthorId;
-      const closeTime  = (msg.timestamp - lastTimestamp) < 5 * 60 * 1000;
-      const isCompact  = sameAuthor && closeTime;
+      const el = document.createElement("div");
+      el.className = `msg-wrapper ${isMe ? "mine" : "theirs"}${compact ? " compact" : ""}`;
+      el.dataset.msgId = msg.id;
 
-      const el = document.createElement('div');
-      el.className = `msg-wrapper ${isMe ? 'mine' : 'theirs'} ${isCompact ? 'compact' : ''}`.trim();
-      el.dataset.messageId = msg.id;
+      const time      = _fmtTime(msg.timestamp);
+      const replyHTML = msg.replyTo ? `
+        <div class="msg-reply" onclick="AppController.scrollToMsg('${msg.replyTo.id}')">
+          <span class="reply-author">${_esc(msg.replyTo.author)}</span>
+          <span class="reply-text">${_esc((msg.replyTo.text || "📎").slice(0, 60))}</span>
+        </div>` : "";
 
-      const time = formatTime(msg.timestamp);
+      const mediaHTML = msg.mediaUrl
+        ? (msg.mediaType === "image"
+          ? `<img class="msg-image" src="${_esc(msg.mediaUrl)}" onclick="UI.openMedia('${_esc(msg.mediaUrl)}')" loading="lazy"/>`
+          : `<video class="msg-video" src="${_esc(msg.mediaUrl)}" controls playsinline></video>`)
+        : "";
 
-      const mediaHTML = _renderMedia(msg);
-      if (!isCompact) {
-        el.innerHTML = `
-          <div class="msg-av" style="background:${stringToColor(msg.author)}">
-            ${escapeHTML(msg.avatar || msg.author.slice(0,2).toUpperCase())}
-          </div>
-          <div class="msg-body">
-            ${!isMe ? `<div class="msg-name">${escapeHTML(msg.author)}${msg.isAdmin ? ' 👑' : ''}</div>` : ''}
-            <div class="msg-bubble">
-              ${mediaHTML}
-              ${msg.text ? `<p class="msg-text">${formatMessageText(msg.text)}</p>` : ''}
-              <div class="msg-meta">
-                <span class="msg-time">${time}</span>
-                ${isMe ? '<span class="msg-status">✓✓</span>' : ''}
-              </div>
+      const reactHTML = _renderReactions(msg, roomId);
+
+      const avatarHTML = compact ? `<div class="msg-av-spacer"></div>` : `
+        <div class="msg-av" style="background:${msg.avatarColor || _color(msg.author)}">${_esc(msg.avatar)}</div>`;
+
+      el.innerHTML = `
+        ${avatarHTML}
+        <div class="msg-body">
+          ${!compact && !isMe ? `<div class="msg-name">${_esc(msg.author)}${msg.isAdmin ? " 👑" : ""}</div>` : ""}
+          <div class="msg-bubble">
+            ${replyHTML}
+            ${mediaHTML}
+            ${msg.text ? `<p class="msg-text">${_fmtText(msg.text)}${msg.edited ? ' <span class="msg-edited">изм.</span>' : ""}</p>` : ""}
+            <div class="msg-meta">
+              <span class="msg-time">${time}</span>
+              ${isMe ? '<span class="msg-status">✓✓</span>' : ""}
             </div>
           </div>
-        `;
-      } else {
-        el.innerHTML = `
-          <div class="msg-av-spacer"></div>
-          <div class="msg-body">
-            <div class="msg-bubble">
-              ${mediaHTML}
-              ${msg.text ? `<p class="msg-text">${formatMessageText(msg.text)}</p>` : ''}
-              <div class="msg-meta">
-                <span class="msg-time">${time}</span>
-                ${isMe ? '<span class="msg-status">✓✓</span>' : ''}
-              </div>
-            </div>
-          </div>
-        `;
-      }
+          ${reactHTML}
+        </div>
+      `;
 
-      // Анимация появления только для последнего сообщения
-      if (idx === messages.length - 1) {
-        el.classList.add('msg-appear');
-      }
+      // Контекстное меню
+      el.addEventListener("contextmenu", e => { e.preventDefault(); _showCtxMenu(e, msg, isMe, roomId); });
+      let ltimer = null;
+      el.addEventListener("touchstart",  () => { ltimer = setTimeout(() => _showCtxMenu(null, msg, isMe, roomId), 600); });
+      el.addEventListener("touchend",    () => clearTimeout(ltimer));
+      el.addEventListener("touchmove",   () => clearTimeout(ltimer));
 
+      if (idx === msgs.length - 1) el.classList.add("msg-appear");
       $.messageList.appendChild(el);
 
-      lastAuthorId  = msg.authorId;
-      lastTimestamp = msg.timestamp;
+      lastAuthorId = msg.authorId;
+      lastTs       = msg.timestamp;
     });
 
-    // Умный скролл
-    if (!State.getState('userScrolledUp')) {
-      scrollToBottom(false);
-    } else {
-      // Показываем кнопку «вниз»
-      showScrollDownBtn();
-    }
+    if (!State.getState("userScrolledUp")) _scrollBottom(false);
+    else _showScrollBtn();
   }
 
-  /**
-   * Рендер индикатора набора текста.
-   * Показывает имена пользователей, которые сейчас печатают.
-   */
-  function renderTypingIndicator() {
-    const typingUsers = State.getState('typingUsers');
-    const users       = State.getState('users');
-
-    if (typingUsers.size === 0) {
-      $.typingIndicator.classList.add('hidden');
-      return;
-    }
-
+  // ── TYPING ──────────────────────────────────────────────────
+  function renderTyping() {
+    const typing = State.getState("typingUsers");
+    const users  = State.getState("users");
+    if (!$.typingEl) return;
+    if (typing.size === 0) { $.typingEl.classList.add("hidden"); return; }
     const names = [];
-    typingUsers.forEach(userId => {
-      const u = users.get(userId);
-      if (u) names.push(u.username);
-    });
-
-    let text = '';
-    if (names.length === 1) text = `${names[0]} печатает`;
-    else if (names.length === 2) text = `${names[0]} и ${names[1]} печатают`;
-    else text = `${names.length} человека печатают`;
-
-    $.typingIndicator.querySelector('.typing-text').textContent = text;
-    $.typingIndicator.classList.remove('hidden');
+    typing.forEach(id => { const u = users.get(id); if (u) names.push(u.username); });
+    $.typingEl.querySelector(".typing-text").textContent =
+      names.length === 1 ? `${names[0]} печатает` : `${names.join(", ")} печатают`;
+    $.typingEl.classList.remove("hidden");
   }
 
-  /**
-   * Обновление заголовка активной комнаты.
-   * @param {Object} room
-   */
-  function updateRoomHeader(room) {
+  // ── ХЕДЕР ЧАТА ─────────────────────────────────────────────
+  function updateHeader(room) {
     if (!room) return;
-    if ($.chatHeaderTitle) $.chatHeaderTitle.textContent = room.name;
+    if ($.headerTitle)  $.headerTitle.textContent  = room.name;
+    if ($.headerAvatar) { $.headerAvatar.textContent = room.type === "global" ? "🌐" : room.type === "channel" ? "📢" : "💬"; $.headerAvatar.style.background = _color(room.name); }
+    if ($.headerStatus) $.headerStatus.textContent = room.type === "dm" ? "личные сообщения" : room.type === "channel" ? "канал" : "общий чат";
+    if ($.emptyState)   $.emptyState.classList.add("hidden");
+    if ($.activeChat)   $.activeChat.classList.remove("hidden");
+    if ($.rightPanel)   $.rightPanel.classList.add("visible-mobile");
+    if ($.leftPanel)    $.leftPanel.classList.add("hidden-mobile");
 
-    const statusLabels = { global: 'общий чат', channel: 'канал', dm: 'личные сообщения' };
-    if ($.chatHeaderStatus) $.chatHeaderStatus.textContent = statusLabels[room.type] || '';
-
-    if ($.chatHeaderAvatar) {
-      const icon = room.type === 'global' ? '🌐' : room.type === 'channel' ? '📢' : '💬';
-      $.chatHeaderAvatar.textContent = icon;
-      $.chatHeaderAvatar.style.background = stringToColor(room.name);
-    }
-
-    // Показываем empty/active
-    if ($.emptyState) $.emptyState.classList.add('hidden');
-    if ($.activeChat) $.activeChat.classList.remove('hidden');
-
-    // Мобиль — показываем правую панель
-    if ($.rightPanel) $.rightPanel.classList.add('visible-mobile');
-    if ($.leftPanel) $.leftPanel.classList.add('hidden-mobile');
-
-    const currentUser = State.getState('currentUser');
-    const isReadonly  = room.type === 'channel' && (!currentUser || !currentUser.isAdmin);
-    if ($.channelBadge) {
-      isReadonly ? $.channelBadge.classList.remove('hidden') : $.channelBadge.classList.add('hidden');
-    }
-    if ($.messageInput) {
-      $.messageInput.disabled = isReadonly;
-      $.messageInput.placeholder = isReadonly ? '' : 'Сообщение...';
-    }
-    if ($.sendBtn) $.sendBtn.disabled = isReadonly;
+    const me = State.getState("currentUser");
+    const ro = room.type === "channel" && (!me || !me.isAdmin);
+    if ($.channelBadge) ro ? $.channelBadge.classList.remove("hidden") : $.channelBadge.classList.add("hidden");
+    if ($.messageInput) { $.messageInput.disabled = ro; $.messageInput.placeholder = ro ? "" : "Сообщение..."; }
+    if ($.sendBtn)      $.sendBtn.disabled = ro;
   }
 
-  /**
-   * Показ уведомления (Toast).
-   * @param {string} message
-   * @param {'success'|'error'|'info'|'dm'} type
-   */
-  function showToast(message, type = 'info') {
-    const toast = document.createElement('div');
-    toast.className = `toast toast-${type}`;
+  // ── REPLY BAR ───────────────────────────────────────────────
+  function showReplyBar(msg) {
+    State.dispatch("replyTo", { id: msg.id, text: msg.text, author: msg.author });
+    State.dispatch("editingMsg", null);
+    if ($.replyBar)  $.replyBar.classList.remove("hidden");
+    if ($.editBar)   $.editBar.classList.add("hidden");
+    if ($.replyText) $.replyText.textContent = `${msg.author}: ${(msg.text || "📎").slice(0, 60)}`;
+    $.messageInput?.focus();
+  }
 
-    const icons = { success: '✓', error: '✕', info: 'ℹ', dm: '💬' };
-    toast.innerHTML = `
-      <span class="toast-icon">${icons[type] || 'ℹ'}</span>
-      <span class="toast-message">${escapeHTML(message)}</span>
+  function hideReplyBar() {
+    State.dispatch("replyTo", null);
+    if ($.replyBar) $.replyBar.classList.add("hidden");
+  }
+
+  // ── EDIT BAR ────────────────────────────────────────────────
+  function showEditBar(msg) {
+    State.dispatch("editingMsg", { id: msg.id, text: msg.text });
+    State.dispatch("replyTo", null);
+    if ($.editBar)  $.editBar.classList.remove("hidden");
+    if ($.replyBar) $.replyBar.classList.add("hidden");
+    if ($.editText) $.editText.textContent = msg.text.slice(0, 60);
+    if ($.messageInput) { $.messageInput.value = msg.text; $.messageInput.focus(); }
+  }
+
+  function hideEditBar() {
+    State.dispatch("editingMsg", null);
+    if ($.editBar) $.editBar.classList.add("hidden");
+    if ($.messageInput) $.messageInput.value = "";
+  }
+
+  // ── ПРОФИЛЬ ─────────────────────────────────────────────────
+  function showProfile() {
+    const user = State.getState("currentUser");
+    if (!user || !$.profileModal) return;
+    $.profileModal.classList.remove("hidden");
+    if ($.profileAvatar)   { $.profileAvatar.textContent = user.avatar; $.profileAvatar.style.background = user.avatarColor || _color(user.username); }
+    if ($.profileName)     $.profileName.textContent     = user.username;
+    if ($.profileRole)     $.profileRole.textContent     = user.isAdmin ? "👑 Администратор" : "👤 Участник";
+    if ($.profileBioInput) $.profileBioInput.value       = user.bio || "";
+    if ($.profileMsgCount) $.profileMsgCount.textContent = State.getState("msgCount");
+  }
+
+  function hideProfile() {
+    if ($.profileModal) $.profileModal.classList.add("hidden");
+  }
+
+  // ── МЕДИА ПРОСМОТР ─────────────────────────────────────────
+  function openMedia(url) {
+    const overlay = document.createElement("div");
+    overlay.className = "media-overlay";
+    overlay.innerHTML = `<img src="${_esc(url)}" /><button class="media-close">✕</button>`;
+    overlay.addEventListener("click", e => { if (e.target === overlay || e.target.classList.contains("media-close")) overlay.remove(); });
+    document.body.appendChild(overlay);
+  }
+
+  // ── КОНТЕКСТНОЕ МЕНЮ ────────────────────────────────────────
+  function _showCtxMenu(e, msg, isMe, roomId) {
+    hideCtxMenu();
+    const menu = $.contextMenu;
+    if (!menu) return;
+
+    menu.innerHTML = `
+      <div class="ctx-item" data-action="reply">↩️ Ответить</div>
+      <div class="ctx-item" data-action="react">😊 Реакция</div>
+      ${isMe ? `<div class="ctx-item" data-action="edit">✏️ Редактировать</div>` : ""}
+      ${isMe ? `<div class="ctx-item danger" data-action="delete">🗑️ Удалить</div>` : ""}
     `;
 
-    $.toastContainer.appendChild(toast);
-    // Форс-рефлоу для запуска CSS-анимации
-    toast.getBoundingClientRect();
-    toast.classList.add('toast-visible');
+    menu.classList.remove("hidden");
 
-    setTimeout(() => {
-      toast.classList.remove('toast-visible');
-      toast.addEventListener('transitionend', () => toast.remove(), { once: true });
-    }, 3500);
-  }
-
-  /**
-   * Пометить комнату как «непрочитанную» в UI.
-   * @param {string} roomId
-   */
-  function markRoomUnread(roomId) {
-    const rooms = State.getState('rooms');
-    const room  = rooms.get(roomId);
-    if (room) {
-      room._unread = true;
-      renderRoomList();
+    if (e) {
+      const x = Math.min(e.clientX, window.innerWidth  - 180);
+      const y = Math.min(e.clientY, window.innerHeight - 160);
+      menu.style.left = x + "px";
+      menu.style.top  = y + "px";
+    } else {
+      menu.style.left = "50%";
+      menu.style.top  = "50%";
+      menu.style.transform = "translate(-50%,-50%)";
     }
-  }
 
-  /**
-   * Обновить отображение задержки в хедере.
-   * @param {number} ms
-   */
-  function updateLatency(ms) {
-    $.latencyDisplay.textContent = `${ms}ms`;
-    $.latencyDisplay.className = ms < 100 ? 'latency good' : ms < 300 ? 'latency ok' : 'latency bad';
-  }
-
-  /** Обновление индикатора статуса соединения */
-  function updateConnectionStatus(status) {
-    $.statusDot.className = `status-dot status-${status}`;
-    const labels = { connected: 'онлайн', connecting: 'подключение...', disconnected: 'офлайн' };
-    $.statusDot.title = labels[status] || status;
-  }
-
-  /**
-   * Прокрутка чата вниз.
-   * @param {boolean} smooth — плавная или мгновенная
-   */
-  function scrollToBottom(smooth = true) {
-    $.messageList.scrollTo({
-      top:      $.messageList.scrollHeight,
-      behavior: smooth ? 'smooth' : 'instant',
-    });
-  }
-
-  /**
-   * Показывает кнопку «↓ перейти вниз» когда пользователь прокрутил вверх.
-   */
-  function showScrollDownBtn() {
-    let btn = document.getElementById('scroll-down-btn');
-    if (!btn) {
-      btn = document.createElement('button');
-      btn.id = 'scroll-down-btn';
-      btn.className = 'scroll-down-btn';
-      btn.innerHTML = '↓';
-      btn.addEventListener('click', () => {
-        State.dispatch('userScrolledUp', false);
-        scrollToBottom(true);
-        btn.remove();
+    menu.querySelectorAll(".ctx-item").forEach(item => {
+      item.addEventListener("click", () => {
+        const action = item.dataset.action;
+        if (action === "reply")  showReplyBar(msg);
+        if (action === "edit")   showEditBar(msg);
+        if (action === "delete") { if (confirm("Удалить сообщение?")) SocketEngine.deleteMessage(roomId, msg.id); }
+        if (action === "react")  _showEmojiPicker(msg, roomId);
+        hideCtxMenu();
       });
-      $.messageList.parentElement.appendChild(btn);
+    });
+  }
+
+  function hideCtxMenu() {
+    if ($.contextMenu) {
+      $.contextMenu.classList.add("hidden");
+      $.contextMenu.style.transform = "";
     }
   }
 
-  /**
-   * Звуковой сигнал уведомления (Web Audio API).
-   * Простой синтетический «пинг».
-   */
-  function playNotificationSound() {
+  function _showEmojiPicker(msg, roomId) {
+    const emojis = ["👍","❤️","😂","😮","😢","🔥","🎉","👏"];
+    const picker = document.createElement("div");
+    picker.className = "emoji-picker";
+    picker.innerHTML = emojis.map(e => `<span class="emoji-opt" data-e="${e}">${e}</span>`).join("");
+    picker.querySelectorAll(".emoji-opt").forEach(s => {
+      s.addEventListener("click", () => { SocketEngine.reactMessage(roomId, msg.id, s.dataset.e); picker.remove(); });
+    });
+    document.body.appendChild(picker);
+    setTimeout(() => picker.remove(), 5000);
+  }
+
+  function _renderReactions(msg, roomId) {
+    if (!msg.reactions || !Object.keys(msg.reactions).length) return "";
+    const me = State.getState("currentUser");
+    return `<div class="msg-reactions">${
+      Object.entries(msg.reactions).map(([emoji, users]) =>
+        `<span class="reaction ${me && users.includes(me.id) ? "mine-react" : ""}"
+          onclick="SocketEngine.reactMessage('${roomId}','${msg.id}','${emoji}')"
+        >${emoji} ${users.length}</span>`
+      ).join("")
+    }</div>`;
+  }
+
+  // ── TOAST ───────────────────────────────────────────────────
+  function showToast(msg, type = "info") {
+    const icons = { success: "✓", error: "✕", info: "ℹ", dm: "💬" };
+    const el    = document.createElement("div");
+    el.className = `toast toast-${type}`;
+    el.innerHTML = `<span>${icons[type] || "ℹ"}</span><span>${_esc(msg)}</span>`;
+    $.toastBox.appendChild(el);
+    el.getBoundingClientRect();
+    el.classList.add("toast-visible");
+    setTimeout(() => { el.classList.remove("toast-visible"); el.addEventListener("transitionend", () => el.remove(), { once: true }); }, 3500);
+  }
+
+  function updateLatency(ms) {
+    if (!$.latencyEl) return;
+    $.latencyEl.textContent = ms + "ms";
+    $.latencyEl.className   = "latency-display " + (ms < 100 ? "good" : ms < 300 ? "ok" : "bad");
+  }
+
+  function markRoomUnread(roomId) {
+    const room = State.getState("rooms").get(roomId);
+    if (room) { room._unread = (room._unread || 0) + 1; renderChatList(); }
+  }
+
+  function playPing() {
     try {
-      const ctx  = new (window.AudioContext || window.webkitAudioContext)();
-      const osc  = ctx.createOscillator();
-      const gain = ctx.createGain();
-      osc.connect(gain);
-      gain.connect(ctx.destination);
-      osc.frequency.setValueAtTime(880, ctx.currentTime);
-      osc.frequency.exponentialRampToValueAtTime(440, ctx.currentTime + 0.15);
-      gain.gain.setValueAtTime(0.3, ctx.currentTime);
-      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.3);
-      osc.start(ctx.currentTime);
-      osc.stop(ctx.currentTime + 0.3);
-    } catch (_) { /* игнорируем если AudioContext недоступен */ }
+      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      const o   = ctx.createOscillator();
+      const g   = ctx.createGain();
+      o.connect(g); g.connect(ctx.destination);
+      o.frequency.setValueAtTime(880, ctx.currentTime);
+      o.frequency.exponentialRampToValueAtTime(440, ctx.currentTime + 0.15);
+      g.gain.setValueAtTime(0.2, ctx.currentTime);
+      g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.3);
+      o.start(); o.stop(ctx.currentTime + 0.3);
+    } catch (_) {}
   }
 
-  // ─── ПРИВАТНЫЕ ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ UI ────────────────
+  function requestNotifPermission() {
+    if ("Notification" in window && Notification.permission === "default") {
+      Notification.requestPermission();
+    }
+  }
 
-  /**
-   * Слушатель прокрутки для «умного скролла».
-   * Определяет, находится ли пользователь внизу.
-   */
-  function _bindScrollListener() {
-    $.messageList.addEventListener('scroll', () => {
-      const el        = $.messageList;
-      const atBottom  = el.scrollHeight - el.scrollTop - el.clientHeight < 60;
-      State.dispatch('userScrolledUp', !atBottom);
+  // ── СКРОЛЛ ──────────────────────────────────────────────────
+  function _scrollBottom(smooth = true) {
+    $.messageList?.scrollTo({ top: $.messageList.scrollHeight, behavior: smooth ? "smooth" : "instant" });
+  }
 
-      if (atBottom) {
-        const btn = document.getElementById('scroll-down-btn');
-        if (btn) btn.remove();
-      }
+  function _showScrollBtn() {
+    let btn = document.getElementById("scroll-btn");
+    if (btn) return;
+    btn = document.createElement("button");
+    btn.id = "scroll-btn";
+    btn.className = "scroll-down-btn";
+    btn.textContent = "↓";
+    btn.onclick = () => { State.dispatch("userScrolledUp", false); _scrollBottom(true); btn.remove(); };
+    $.messageList?.parentElement.appendChild(btn);
+  }
+
+  function _bindScroll() {
+    $.messageList?.addEventListener("scroll", () => {
+      const el      = $.messageList;
+      const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+      State.dispatch("userScrolledUp", !atBottom);
+      if (atBottom) document.getElementById("scroll-btn")?.remove();
     });
   }
 
-  /**
-   * Привязка слушателей к инпуту сообщения.
-   * Реализует throttle для события typing.
-   */
-  function _bindInputListeners() {
-    let typingTimer   = null;
-    let isTyping      = false;
-    const THROTTLE_MS = 2000; // отправляем typing_start не чаще раза в 2с
+  // ── ИНПУТ ────────────────────────────────────────────────── 
+  function _bindInput() {
+    let typingTimer = null, isTyping = false;
 
-    $.messageInput.addEventListener('input', () => {
-      const roomId = State.getState('activeRoomId');
-      if (!roomId) return;
-
-      if (!isTyping) {
-        SocketEngine.typingStart(roomId);
-        isTyping = true;
-      }
-
+    $.messageInput?.addEventListener("input", () => {
+      const roomId = State.getState("activeRoomId");
+      if (!isTyping) { SocketEngine.typingStart(roomId); isTyping = true; }
       clearTimeout(typingTimer);
-      typingTimer = setTimeout(() => {
-        SocketEngine.typingStop(roomId);
-        isTyping = false;
-      }, THROTTLE_MS);
-
-      // Авторастяжение textarea
-      $.messageInput.style.height = 'auto';
-      $.messageInput.style.height = Math.min($.messageInput.scrollHeight, 150) + 'px';
+      typingTimer = setTimeout(() => { SocketEngine.typingStop(roomId); isTyping = false; }, 2000);
+      $.messageInput.style.height = "auto";
+      $.messageInput.style.height = Math.min($.messageInput.scrollHeight, 150) + "px";
     });
 
-    // Отправка по Enter (Shift+Enter = новая строка)
-    $.messageInput.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' && !e.shiftKey) {
+    $.messageInput?.addEventListener("keydown", e => {
+      if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
-        clearTimeout(typingTimer);
-        isTyping = false;
+        clearTimeout(typingTimer); isTyping = false;
         AppController.sendMessage();
       }
     });
 
+    $.sendBtn?.addEventListener("click", () => AppController.sendMessage());
+
+    $.replyCancel?.addEventListener("click", () => hideReplyBar());
+    $.editCancel?.addEventListener("click",  () => hideEditBar());
+
+    $.attachBtn?.addEventListener("click", () => $.fileInput?.click());
+    $.fileInput?.addEventListener("change", e => {
+      Array.from(e.target.files).forEach(f => AppController.sendFile(f));
+      $.fileInput.value = "";
+    });
   }
 
-  function _bindMobileNav() {
-    // Кнопка назад на мобиле
-    if ($.backBtn) {
-      $.backBtn.addEventListener('click', () => {
-        if ($.rightPanel) $.rightPanel.classList.remove('visible-mobile');
-        if ($.leftPanel)  $.leftPanel.classList.remove('hidden-mobile');
-      });
-    }
+  function _bindActions() {
+    // Назад (мобиль)
+    $.backBtn?.addEventListener("click", () => {
+      $.rightPanel?.classList.remove("visible-mobile");
+      $.leftPanel?.classList.remove("hidden-mobile");
+    });
 
-    // Прикрепить файл
-    if ($.attachBtn && $.fileInput) {
-      $.attachBtn.addEventListener('click', () => $.fileInput.click());
-      $.fileInput.addEventListener('change', (e) => {
-        const files = Array.from(e.target.files);
-        files.forEach(file => AppController.sendFile(file));
-        $.fileInput.value = '';
-      });
-    }
+    // Тема
+    $.themeToggle?.addEventListener("click", () => {
+      const cur = State.getState("theme");
+      const nxt = cur === "dark" ? "light" : "dark";
+      State.dispatch("theme", nxt);
+      applyTheme(nxt);
+      SocketEngine.updateProfile({ theme: nxt });
+    });
+
+    // Профиль — кнопка сохранить
+    $.profileSaveBtn?.addEventListener("click", () => {
+      const bio = ($.profileBioInput?.value || "").trim().slice(0, 120);
+      SocketEngine.updateProfile({ bio });
+      showToast("Профиль сохранён", "success");
+      hideProfile();
+    });
+
+    // Поиск
+    $.searchInput?.addEventListener("input", () => renderChatList());
+
+    // Закрытие контекстного меню
+    document.addEventListener("click", e => {
+      if ($.contextMenu && !$.contextMenu.contains(e.target)) hideCtxMenu();
+    });
+
+    // Клик на аватар в хедере → открыть профиль
+    $.headerAvatar?.addEventListener("click", () => showProfile());
+
+    // Запросить разрешение на уведомления
+    requestNotifPermission();
   }
 
-  // ─── УТИЛИТЫ ─────────────────────────────────────────────
-
-  /**
-   * Экранирование HTML — защита от XSS.
-   * @param {string} str
-   * @returns {string}
-   */
-  function escapeHTML(str) {
-    if (!str) return '';
-    return String(str)
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;')
-      .replace(/'/g, '&#x27;');
+  // ── УТИЛИТЫ ─────────────────────────────────────────────────
+  function _esc(s) {
+    if (!s) return "";
+    return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#x27;");
   }
 
-  /**
-   * Форматирование текста сообщения:
-   * - экранирование XSS
-   * - URL → кликабельные ссылки
-   * - **bold** → <strong>
-   * - `code` → <code>
-   * @param {string} text
-   * @returns {string} HTML-строка
-   */
-  function formatMessageText(text) {
-    let escaped = escapeHTML(text);
-
-    // URL → ссылки
-    escaped = escaped.replace(
-      /(https?:\/\/[^\s<>"']+)/g,
-      '<a href="$1" target="_blank" rel="noopener noreferrer" class="msg-link">$1</a>'
-    );
-
-    // **bold**
-    escaped = escaped.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
-
-    // `code`
-    escaped = escaped.replace(/`([^`]+)`/g, '<code class="inline-code">$1</code>');
-
-    // Новые строки
-    escaped = escaped.replace(/\n/g, '<br>');
-
-    return escaped;
+  function _fmtText(text) {
+    let s = _esc(text);
+    s = s.replace(/(https?:\/\/[^\s<>"']+)/g, '<a href="$1" target="_blank" rel="noopener" class="msg-link">$1</a>');
+    s = s.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
+    s = s.replace(/`([^`]+)`/g, '<code class="inline-code">$1</code>');
+    s = s.replace(/\n/g, "<br>");
+    return s;
   }
 
-  /**
-   * Форматирование метки времени.
-   * @param {number} timestamp
-   * @returns {string} '14:35' или 'вчера 14:35'
-   */
-  function formatTime(timestamp) {
-    const date  = new Date(timestamp);
-    const now   = new Date();
-    const hours = String(date.getHours()).padStart(2, '0');
-    const mins  = String(date.getMinutes()).padStart(2, '0');
-    const time  = `${hours}:${mins}`;
-
-    const sameDay = date.toDateString() === now.toDateString();
-    if (sameDay) return time;
-
-    const yesterday = new Date(now);
-    yesterday.setDate(now.getDate() - 1);
-    if (date.toDateString() === yesterday.toDateString()) return `вчера ${time}`;
-
-    return `${date.getDate()}.${date.getMonth()+1} ${time}`;
+  function _fmtTime(ts) {
+    const d    = new Date(ts), now = new Date();
+    const h    = String(d.getHours()).padStart(2,"0");
+    const m    = String(d.getMinutes()).padStart(2,"0");
+    const time = `${h}:${m}`;
+    if (d.toDateString() === now.toDateString()) return time;
+    const yest = new Date(now); yest.setDate(now.getDate() - 1);
+    if (d.toDateString() === yest.toDateString()) return `вчера ${time}`;
+    return `${d.getDate()}.${d.getMonth()+1} ${time}`;
   }
 
-  /**
-   * Детерминированный цвет из строки (для аватаров).
-   * Используется djb2 hash.
-   * @param {string} str
-   * @returns {string} hsl-цвет
-   */
-  function stringToColor(str) {
-    let hash = 5381;
-    for (let i = 0; i < str.length; i++) {
-      hash = ((hash << 5) + hash) ^ str.charCodeAt(i);
-    }
-    const hue = Math.abs(hash) % 360;
-    return `hsl(${hue}, 60%, 45%)`;
-  }
-
-  function _renderMedia(msg) {
-    if (!msg.mediaUrl) return '';
-    if (msg.mediaType === 'image') {
-      return `<img class="msg-image" src="${escapeHTML(msg.mediaUrl)}" alt="фото" onclick="window.open(this.src,'_blank')" loading="lazy" />`;
-    }
-    if (msg.mediaType === 'video') {
-      return `<video class="msg-video" src="${escapeHTML(msg.mediaUrl)}" controls playsinline></video>`;
-    }
-    return '';
+  function _color(str) {
+    let h = 5381;
+    for (let i = 0; i < str.length; i++) h = ((h << 5) + h) ^ str.charCodeAt(i);
+    return `hsl(${Math.abs(h) % 360},55%,42%)`;
   }
 
   return {
-    init,
-    switchScreen,
-    renderRoomList,
-    renderUserList,
-    renderMessages,
-    renderTypingIndicator,
-    updateRoomHeader,
-    updateConnectionStatus,
-    showToast,
-    markRoomUnread,
-    updateLatency,
-    playNotificationSound,
-    scrollToBottom,
-    escapeHTML,
+    init, switchScreen, applyTheme,
+    renderChatList, renderUserList, renderMessages, renderTyping,
+    updateHeader, showReplyBar, hideReplyBar, showEditBar, hideEditBar,
+    showProfile, hideProfile, openMedia, hideCtxMenu,
+    showToast, updateLatency, markRoomUnread, playPing,
   };
 })();
 
 // ============================================================
-//  БЛОК 4: APP CONTROLLER — точка входа, связывает всё
+//  APP CONTROLLER
 // ============================================================
-
-/**
- * AppController — оркестратор приложения.
- * Инициализирует систему, подписывается на State и обрабатывает действия.
- */
 const AppController = (function () {
 
-  /**
-   * Инициализация приложения после загрузки DOM.
-   * Порядок:
-   *   1. Init UI (кэш DOM-элементов)
-   *   2. Bind UI actions (кнопки)
-   *   3. Subscribe на State
-   *   4. Connect Socket
-   */
   function init() {
     UI.init();
-    _bindUIActions();
-    _subscribeToState();
-
-    // Запуск периодического пинга для измерения задержки
-    setInterval(() => {
-      if (State.getState('screen') === 'chat') {
-        SocketEngine.ping();
-      }
-    }, 5000);
+    _bindState();
+    _bindLogin();
+    setInterval(() => { if (State.getState("screen") === "chat") SocketEngine.ping(); }, 5000);
   }
 
-  /**
-   * Привязка пользовательских действий к UI-элементам.
-   */
-  function _bindUIActions() {
-    const loginBtn   = document.getElementById('login-btn');
-    const sendBtn    = document.getElementById('send-btn');
-    const usernameIn = document.getElementById('username-input');
-
-    loginBtn.addEventListener('click', handleLogin);
-    sendBtn.addEventListener('click', sendMessage);
-
-    usernameIn.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') handleLogin();
-    });
+  function _bindState() {
+    State.subscribe("screen",           s  => UI.switchScreen(s));
+    State.subscribe("theme",            t  => UI.applyTheme(t));
+    State.subscribe("rooms",            () => UI.renderChatList());
+    State.subscribe("users",            () => UI.renderUserList());
+    State.subscribe("messages",         () => UI.renderMessages());
+    State.subscribe("typingUsers",      () => UI.renderTyping());
   }
 
-  /**
-   * Подписки на изменения State → обновление UI.
-   * Это «реактивная» связь State ↔ UI.
-   */
-  function _subscribeToState() {
-    // Смена экрана
-    State.subscribe('screen', (screen) => {
-      UI.switchScreen(screen);
-    });
-
-    // Обновление комнат
-    State.subscribe('rooms', () => {
-      UI.renderRoomList();
-    });
-
-    // Обновление пользователей
-    State.subscribe('users', () => {
-      UI.renderUserList();
-    });
-
-    // Обновление сообщений
-    State.subscribe('messages', () => {
-      UI.renderMessages();
-    });
-
-    // Статус соединения
-    State.subscribe('connectionStatus', (status) => {
-      UI.updateConnectionStatus(status);
-    });
-
-    // Набор текста
-    State.subscribe('typingUsers', () => {
-      UI.renderTypingIndicator();
-    });
+  function _bindLogin() {
+    document.getElementById("login-btn")?.addEventListener("click", handleLogin);
+    document.getElementById("username-input")?.addEventListener("keydown", e => { if (e.key === "Enter") handleLogin(); });
   }
 
-  /**
-   * Обработчик входа в систему.
-   * Подключается к сокету, отправляет auth.
-   */
   function handleLogin() {
-    const input    = document.getElementById('username-input');
-    const username = (input.value || '').trim();
-
+    const input    = document.getElementById("username-input");
+    const username = (input?.value || "").trim();
     if (username.length < 2) {
-      UI.showToast('Имя должно содержать минимум 2 символа', 'error');
-      input.classList.add('shake');
-      input.addEventListener('animationend', () => input.classList.remove('shake'), { once: true });
+      UI.showToast("Имя минимум 2 символа", "error");
+      input?.classList.add("shake");
+      input?.addEventListener("animationend", () => input.classList.remove("shake"), { once: true });
       return;
     }
-
-    const btn = document.getElementById('login-btn');
-    btn.textContent = 'Подключение...';
-    btn.disabled = true;
+    const btn = document.getElementById("login-btn");
+    if (btn) { btn.disabled = true; btn.querySelector("span").textContent = "Подключение..."; }
 
     SocketEngine.connect();
-
-    // Слушаем успешное подключение сокета для отправки auth
-    const checkReady = setInterval(() => {
-      const status = State.getState('connectionStatus');
-      if (status === 'connected') {
-        clearInterval(checkReady);
-        SocketEngine.auth(username);
-        btn.textContent = 'Войти';
-        btn.disabled = false;
-      } else if (status === 'disconnected') {
-        clearInterval(checkReady);
-        UI.showToast('Не удалось подключиться к серверу', 'error');
-        btn.textContent = 'Войти';
-        btn.disabled = false;
-      }
+    const check = setInterval(() => {
+      const s = State.getState("connectionStatus");
+      if (s === "connected")    { clearInterval(check); SocketEngine.auth(username); if (btn) { btn.disabled = false; btn.querySelector("span").textContent = "Начать"; } }
+      if (s === "disconnected") { clearInterval(check); UI.showToast("Нет связи с сервером", "error"); if (btn) { btn.disabled = false; btn.querySelector("span").textContent = "Начать"; } }
     }, 100);
   }
 
-  /**
-   * Отправка сообщения в активную комнату.
-   */
   function sendMessage() {
-    const input      = document.getElementById('message-input');
-    const text       = (input.value || '').trim();
-    const activeRoom = State.getState('activeRoomId');
+    const input      = document.getElementById("message-input");
+    const text       = (input?.value || "").trim();
+    const roomId     = State.getState("activeRoomId");
+    const editingMsg = State.getState("editingMsg");
+    const replyTo    = State.getState("replyTo");
 
-    if (!text || !activeRoom) return;
+    if (!roomId) return;
 
-    SocketEngine.sendMessage(activeRoom, text);
-    input.value = '';
-    input.style.height = 'auto';
-    input.focus();
-  }
-
-  /**
-   * Переключение активной комнаты.
-   * @param {string} roomId
-   */
-  function switchRoom(roomId) {
-    const rooms = State.getState('rooms');
-    const room  = rooms.get(roomId);
-    if (!room) return;
-
-    // Сбрасываем непрочитанное
-    if (room._unread) {
-      room._unread = false;
+    if (editingMsg) {
+      if (!text) return;
+      SocketEngine.editMessage(roomId, editingMsg.id, text);
+      UI.hideEditBar();
+      if (input) { input.value = ""; input.style.height = "auto"; }
+      return;
     }
 
-    // Обновляем State
-    State.dispatch('activeRoomId', roomId);
-    State.dispatch('typingUsers', new Set());
-    State.dispatch('userScrolledUp', false);
-
-    // Обновляем UI хедер
-    UI.updateRoomHeader(room);
-
-    // Запрашиваем историю если ещё нет
-    const messages = State.getState('messages');
-    if (!messages.has(roomId)) {
-      SocketEngine.joinRoom(roomId);
-    } else {
-      UI.renderMessages();
-    }
-
-    // Перерисовываем список комнат (убираем активный класс)
-    UI.renderRoomList();
-
-    // Закрываем мобильный сайдбар
-    const sidebar = document.getElementById('sidebar');
-    if (sidebar) sidebar.classList.remove('open');
+    if (!text) return;
+    SocketEngine.sendMessage(roomId, text, { replyToId: replyTo?.id || null });
+    UI.hideReplyBar();
+    if (input) { input.value = ""; input.style.height = "auto"; input.focus(); }
   }
 
-  /**
-   * Отправка файла (фото/видео) — конвертируем в base64 и шлём через сокет.
-   * В продакшне здесь будет upload на S3/Cloudinary.
-   */
   function sendFile(file) {
-    const activeRoom = State.getState('activeRoomId');
-    if (!activeRoom) return;
-
-    const isImage = file.type.startsWith('image/');
-    const isVideo = file.type.startsWith('video/');
-    if (!isImage && !isVideo) { UI.showToast('Поддерживаются только фото и видео', 'error'); return; }
-    if (file.size > 10 * 1024 * 1024) { UI.showToast('Файл слишком большой (макс. 10MB)', 'error'); return; }
-
+    const roomId = State.getState("activeRoomId");
+    if (!roomId) return;
+    if (!file.type.startsWith("image/") && !file.type.startsWith("video/")) { UI.showToast("Только фото и видео", "error"); return; }
+    if (file.size > 15 * 1024 * 1024) { UI.showToast("Файл слишком большой (макс. 15MB)", "error"); return; }
     const reader = new FileReader();
-    reader.onload = (e) => {
-      SocketEngine.sendMessage(activeRoom, '', {
-        mediaUrl:  e.target.result,
-        mediaType: isImage ? 'image' : 'video',
-        fileName:  file.name,
-      });
-    };
+    reader.onload = e => SocketEngine.sendMessage(roomId, "", { mediaUrl: e.target.result, mediaType: file.type.startsWith("image/") ? "image" : "video" });
     reader.readAsDataURL(file);
   }
 
-  return { init, handleLogin, sendMessage, sendFile, switchRoom };
+  function switchRoom(roomId) {
+    const rooms = State.getState("rooms");
+    const room  = rooms.get(roomId);
+    if (!room) return;
+    room._unread = 0;
+    State.dispatch("activeRoomId", roomId);
+    State.dispatch("typingUsers",  new Set());
+    State.dispatch("userScrolledUp", false);
+    UI.updateHeader(room);
+    const msgs = State.getState("messages");
+    if (!msgs.has(roomId)) SocketEngine.joinRoom(roomId);
+    else UI.renderMessages();
+    UI.renderChatList();
+    UI.hideReplyBar();
+    UI.hideEditBar();
+  }
+
+  function scrollToMsg(msgId) {
+    const el = document.querySelector(`[data-msg-id="${msgId}"]`);
+    if (el) { el.scrollIntoView({ behavior: "smooth", block: "center" }); el.classList.add("msg-highlight"); setTimeout(() => el.classList.remove("msg-highlight"), 1500); }
+  }
+
+  return { init, handleLogin, sendMessage, sendFile, switchRoom, scrollToMsg };
 })();
 
-// ─── ЗАПУСК ──────────────────────────────────────────────────
-document.addEventListener('DOMContentLoaded', () => {
+// ── СТАРТ ───────────────────────────────────────────────────
+document.addEventListener("DOMContentLoaded", () => {
   AppController.init();
-
-  // Инициализация экрана из State
-  UI.switchScreen(State.getState('screen'));
-  UI.updateConnectionStatus(State.getState('connectionStatus'));
-
-  // Анимация появления логин-экрана
-  document.getElementById('login-screen').classList.add('fade-in');
+  UI.switchScreen(State.getState("screen"));
+  UI.applyTheme(State.getState("theme"));
+  document.getElementById("login-screen")?.classList.add("fade-up");
 });
