@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#0d0f14" />
+  <title>MARK OS — Мессенджер</title>
+
+  <!-- Стили -->
+  <link rel="stylesheet" href="/style.css" />
+
+  <!-- Favicon: SVG-инлайн через data URI -->
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='22' fill='%235e81f4'/><text y='.9em' x='10' font-size='80'>💬</text></svg>" />
+</head>
+<body>
+
+<!-- ============================================================
+     ЭКРАН АВТОРИЗАЦИИ
+     ============================================================ -->
+<div id="login-screen">
+  <div class="login-card">
+    <div class="login-logo">💬</div>
+    <h1 class="login-title">MARK OS</h1>
+    <p class="login-subtitle">Защищённый мессенджер нового поколения</p>
+
+    <div class="login-field">
+      <input
+        type="text"
+        id="username-input"
+        placeholder="Введите ваше имя..."
+        maxlength="32"
+        autocomplete="off"
+        spellcheck="false"
+      />
+    </div>
+
+    <button id="login-btn" type="button">Войти в систему</button>
+  </div>
+</div>
+
+<!-- ============================================================
+     ЭКРАН ЧАТА
+     ============================================================ -->
+<div id="chat-screen" class="hidden">
+
+  <!-- ЛЕВЫЙ САЙДБАР — комнаты -->
+  <aside id="sidebar">
+    <div class="sidebar-header">
+      <div class="app-logo-sm">💬</div>
+      <span class="app-name">MARK OS</span>
+    </div>
+    <div class="sidebar-body" id="room-list">
+      <!-- Рендерится из app.js: UI.renderRoomList() -->
+    </div>
+  </aside>
+
+  <!-- HEADER — информация о комнате + статус -->
+  <header id="chat-header">
+    <!-- Мобильный тоггл левого сайдбара -->
+    <button id="sidebar-toggle" aria-label="Открыть меню">☰</button>
+
+    <div class="room-info">
+      <div id="room-title">Главный зал</div>
+      <div id="room-subtitle">Загрузка...</div>
+    </div>
+
+    <!-- Badge «только чтение» для каналов -->
+    <div id="channel-badge" class="hidden">🔒 Только чтение</div>
+
+    <!-- Мета-информация: задержка + статус -->
+    <div class="header-meta">
+      <span id="latency" class="latency good">—ms</span>
+      <div id="status-dot" class="status-dot status-connecting" title="Подключение..."></div>
+    </div>
+
+    <!-- Мобильный тоггл правого сайдбара -->
+    <button id="members-toggle" aria-label="Участники">👥</button>
+  </header>
+
+  <!-- ОСНОВНАЯ ОБЛАСТЬ — сообщения + ввод -->
+  <main id="main-area">
+
+    <!-- Список сообщений -->
+    <div id="message-list">
+      <!-- Рендерится из app.js: UI.renderMessages() -->
+    </div>
+
+    <!-- Индикатор набора текста -->
+    <div id="typing-indicator" class="hidden">
+      <div class="typing-dots">
+        <div class="typing-dot"></div>
+        <div class="typing-dot"></div>
+        <div class="typing-dot"></div>
+      </div>
+      <span class="typing-text"></span>
+    </div>
+
+    <!-- Поле ввода -->
+    <div id="input-area">
+      <div class="input-box">
+        <textarea
+          id="message-input"
+          placeholder="Написать сообщение..."
+          rows="1"
+          maxlength="4096"
+          autocomplete="off"
+          spellcheck="true"
+        ></textarea>
+        <button id="send-btn" aria-label="Отправить">
+          <!-- SVG иконка отправки -->
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="22" y1="2" x2="11" y2="13"></line>
+            <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+          </svg>
+        </button>
+      </div>
+    </div>
+
+  </main>
+
+  <!-- ПРАВЫЙ САЙДБАР — участники -->
+  <aside id="members-sidebar">
+    <div class="members-header">
+      <span class="members-title">Онлайн</span>
+      <span id="online-count">0</span>
+    </div>
+    <div id="user-list">
+      <!-- Рендерится из app.js: UI.renderUserList() -->
+    </div>
+  </aside>
+
+</div><!-- /#chat-screen -->
+
+<!-- Toast-контейнер (поверх всего) -->
+<div id="toast-container"></div>
+
+<!-- Socket.io клиент -->
+<script src="/socket.io/socket.io.js"></script>
+
+<!-- Основной движок приложения -->
+<script src="/app.js"></script>
+
+</body>
+</html>
