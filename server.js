@@ -14,7 +14,7 @@ const fs   = require('fs');
 const { v4: uuidv4 } = require('uuid');
 
 // ─── КОНФИГ ─────────────────────────────────────────────────
-const PORT          = process.env.PORT || 8080;
+const PORT          = process.env.PORT || 3000;
 const MAX_HISTORY   = 100;   // максимум сообщений на комнату в памяти
 const TYPING_EXPIRE = 4000;  // мс — после этого индикатор набора гасится
 
@@ -82,7 +82,7 @@ const server = http.createServer((req, res) => {
   // Socket.io обрабатывает свои маршруты сам — пропускаем
   if (urlPath.startsWith('/socket.io')) return;
 
-  const rootDir = __dirname;
+  const rootDir = 'C:\\Projects\\mark-os';
   let filePath = path.join(rootDir, 'public',
     urlPath === '/' ? 'index.html' : urlPath
   );
@@ -181,7 +181,7 @@ io.on('connection', (socket) => {
    * Сервер валидирует права, создаёт объект сообщения,
    * сохраняет в историю и рассылает всем в комнате.
    */
-  socket.on('send_message', ({ roomId, text }) => {
+  socket.on('send_message', ({ roomId, text, mediaUrl, mediaType }) => {
     const user = Store.users.get(socket.id);
     if (!user) { socket.emit('error_event', { message: 'Не авторизован' }); return; }
 
@@ -189,7 +189,7 @@ io.on('connection', (socket) => {
     if (!room) { socket.emit('error_event', { message: 'Комната не найдена' }); return; }
 
     const cleanText = (text || '').trim().slice(0, 4096);
-    if (!cleanText) return;
+    if (!cleanText && !mediaUrl) return;
 
     // ── ПРОВЕРКА ПРАВ: только admin пишет в каналы ──────────
     if (room.type === 'channel' && !user.isAdmin) {
@@ -215,6 +215,8 @@ io.on('connection', (socket) => {
       text:      cleanText,
       timestamp: Date.now(),
       isAdmin:   user.isAdmin,
+      mediaUrl:  mediaUrl  || null,
+      mediaType: mediaType || null,
     };
 
     // Сохраняем в историю комнаты (кольцевой буфер)

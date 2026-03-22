@@ -2,182 +2,175 @@
 <html lang="ru">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
   <meta name="theme-color" content="#0d0f14" />
-  <title>MARK OS — Мессенджер</title>
-
-  <!-- Стили -->
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <title>MARK OS</title>
   <link rel="stylesheet" href="/style.css" />
-
-  <!-- Favicon: SVG-инлайн через data URI -->
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='22' fill='%235e81f4'/><text y='.9em' x='10' font-size='80'>💬</text></svg>" />
 </head>
 <body>
 
-<!-- ============================================================
-     ЭКРАН АВТОРИЗАЦИИ
-     ============================================================ -->
 <div id="login-screen">
+  <div class="login-bg">
+    <div class="login-blob b1"></div>
+    <div class="login-blob b2"></div>
+    <div class="login-blob b3"></div>
+  </div>
   <div class="login-card">
-    <div class="login-logo">💬</div>
+    <div class="login-logo"><span>💬</span></div>
     <h1 class="login-title">MARK OS</h1>
-    <p class="login-subtitle">Защищённый мессенджер нового поколения</p>
-
+    <p class="login-subtitle">Мессенджер нового поколения</p>
     <div class="login-field">
-      <input
-        type="text"
-        id="username-input"
-        placeholder="Введите ваше имя..."
-        maxlength="32"
-        autocomplete="off"
-        spellcheck="false"
-      />
+      <input type="text" id="username-input" placeholder="Введите ваше имя..." maxlength="32" autocomplete="off" spellcheck="false" />
     </div>
-
-    <button id="login-btn" type="button">Войти в систему</button>
+    <button id="login-btn" type="button">
+      <span>Начать</span>
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
+    </button>
   </div>
 </div>
 
-<!-- ============================================================
-     ЭКРАН ЧАТА
-     ============================================================ -->
 <div id="chat-screen" class="hidden">
 
-  <!-- ЛЕВЫЙ САЙДБАР — комнаты -->
-  <aside id="sidebar">
-    <div class="sidebar-header">
-      <div class="app-logo-sm">💬</div>
-      <span class="app-name">MARK OS</span>
-    </div>
-    <div class="sidebar-body" id="room-list">
-      <!-- Рендерится из app.js: UI.renderRoomList() -->
-    </div>
-  </aside>
-
-  <!-- HEADER — информация о комнате + статус -->
-  <header id="chat-header">
-    <!-- Мобильный тоггл левого сайдбара -->
-    <button id="sidebar-toggle" aria-label="Открыть меню">☰</button>
-
-    <div class="room-info">
-      <div id="room-title">Главный зал</div>
-      <div id="room-subtitle">Загрузка...</div>
-    </div>
-
-    <!-- Badge «только чтение» для каналов -->
-    <div id="channel-badge" class="hidden">🔒 Только чтение</div>
-
-    <!-- Мета-информация: задержка + статус -->
-    <div class="header-meta">
-      <span id="latency" class="latency good">—ms</span>
-      <div id="status-dot" class="status-dot status-connecting" title="Подключение..."></div>
-    </div>
-
-    <!-- Мобильный тоггл правого сайдбара -->
-    <button id="members-toggle" aria-label="Участники">👥</button>
-  </header>
-
-  <!-- ОСНОВНАЯ ОБЛАСТЬ — сообщения + ввод -->
-  <main id="main-area">
-
-    <!-- Список сообщений -->
-    <div id="message-list">
-      <!-- Рендерится из app.js: UI.renderMessages() -->
-    </div>
-
-    <!-- Индикатор набора текста -->
-    <div id="typing-indicator" class="hidden">
-      <div class="typing-dots">
-        <div class="typing-dot"></div>
-        <div class="typing-dot"></div>
-        <div class="typing-dot"></div>
+  <div id="left-panel">
+    <div class="lp-header">
+      <button class="lp-menu-btn" id="menu-btn">
+        <span></span><span></span><span></span>
+      </button>
+      <div class="lp-search-wrap">
+        <svg class="search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        <input type="text" id="search-input" placeholder="Поиск..." autocomplete="off" />
       </div>
-      <span class="typing-text"></span>
     </div>
 
-    <!-- Поле ввода -->
-    <div id="input-area">
-      <div class="input-box">
-        <textarea
-          id="message-input"
-          placeholder="Написать сообщение..."
-          rows="1"
-          maxlength="4096"
-          autocomplete="off"
-          spellcheck="true"
-        ></textarea>
-        <button id="send-btn" aria-label="Отправить">
-          <!-- SVG иконка отправки -->
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-            <line x1="22" y1="2" x2="11" y2="13"></line>
-            <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
-          </svg>
+    <div id="chat-list" class="chat-list"></div>
+
+    <div class="lp-footer">
+      <button class="lp-footer-btn active" id="tab-chats" onclick="Tabs.show('chats')">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+        <span>Чаты</span>
+      </button>
+      <button class="lp-footer-btn" id="tab-contacts" onclick="Tabs.show('contacts')">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+        <span>Люди</span>
+      </button>
+      <button class="lp-footer-btn" id="tab-profile" onclick="Tabs.show('profile')">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+        <span>Профиль</span>
+      </button>
+    </div>
+  </div>
+
+  <div id="right-panel">
+    <div id="empty-state">
+      <div class="empty-icon">💬</div>
+      <h2>Выберите чат</h2>
+      <p>Выберите чат слева или начните новую переписку</p>
+    </div>
+
+    <div id="active-chat" class="hidden">
+      <div id="chat-header">
+        <button id="back-btn" class="back-btn">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
         </button>
+        <div class="chat-header-avatar" id="chat-header-avatar"></div>
+        <div class="chat-header-info">
+          <div id="chat-header-title">Чат</div>
+          <div id="chat-header-status">онлайн</div>
+        </div>
+        <div class="chat-header-actions">
+          <button class="header-action-btn">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/></svg>
+          </button>
+        </div>
+      </div>
+
+      <div id="message-list"></div>
+
+      <div id="typing-indicator" class="hidden">
+        <div class="typing-dots"><span></span><span></span><span></span></div>
+        <span class="typing-text"></span>
+      </div>
+
+      <div id="channel-badge" class="channel-readonly hidden">
+        🔒 Только администратор может писать в этот канал
+      </div>
+
+      <div id="input-area">
+        <div class="input-row">
+          <button class="input-attach-btn" id="attach-btn">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+          </button>
+          <div class="input-box">
+            <textarea id="message-input" placeholder="Сообщение..." rows="1" maxlength="4096" autocomplete="off"></textarea>
+          </div>
+          <button id="send-btn" class="send-btn">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+          </button>
+        </div>
+        <input type="file" id="file-input" accept="image/*,video/*" style="display:none" multiple />
       </div>
     </div>
+  </div>
 
-  </main>
+</div>
 
-  <!-- ПРАВЫЙ САЙДБАР — участники -->
-  <aside id="members-sidebar">
-    <div class="members-header">
-      <span class="members-title">Онлайн</span>
-      <span id="online-count">0</span>
+<div id="contacts-panel" class="side-panel hidden">
+  <div class="side-panel-header">
+    <h2>Люди онлайн</h2>
+    <span id="online-count" class="online-badge">0</span>
+  </div>
+  <div id="user-list" class="user-list"></div>
+</div>
+
+<div id="profile-panel" class="side-panel hidden">
+  <div class="side-panel-header"><h2>Профиль</h2></div>
+  <div class="profile-body">
+    <div class="profile-avatar-wrap">
+      <div id="profile-avatar" class="profile-avatar"></div>
     </div>
-    <div id="user-list">
-      <!-- Рендерится из app.js: UI.renderUserList() -->
+    <div id="profile-name" class="profile-name"></div>
+    <div id="profile-role" class="profile-role"></div>
+    <div class="profile-stats">
+      <div class="stat-item"><span id="stat-messages">0</span><span>сообщений</span></div>
+      <div class="stat-item"><span id="stat-chats">0</span><span>чатов</span></div>
     </div>
-  </aside>
+  </div>
+</div>
 
-</div><!-- /#chat-screen -->
-
-<!-- Toast-контейнер (поверх всего) -->
 <div id="toast-container"></div>
 
-<!-- Socket.io клиент -->
 <script src="/socket.io/socket.io.js"></script>
-
-<!-- Основной движок приложения -->
 <script src="/app.js"></script>
-
-
-<!-- Мобильная нижняя навигация -->
-<nav id="mobile-nav">
-  <button class="mobile-nav-btn active" id="nav-chats" onclick="MobileNav.show('chats')">
-    <span class="nav-icon">💬</span>
-    <span>Чаты</span>
-  </button>
-  <button class="mobile-nav-btn" id="nav-contacts" onclick="MobileNav.show('contacts')">
-    <span class="nav-icon">👥</span>
-    <span>Контакты</span>
-  </button>
-  <button class="mobile-nav-btn" id="nav-settings" onclick="MobileNav.show('settings')">
-    <span class="nav-icon">⚙️</span>
-    <span>Настройки</span>
-  </button>
-</nav>
-
 <script>
-// Мобильная навигация
-const MobileNav = {
+const Tabs = {
   show(tab) {
-    document.querySelectorAll('.mobile-nav-btn').forEach(b => b.classList.remove('active'));
-    document.getElementById('nav-' + tab).classList.add('active');
-    const sidebar = document.getElementById('sidebar');
-    const members = document.getElementById('members-sidebar');
-    if (tab === 'chats') {
-      sidebar.classList.add('open');
-      members.classList.remove('open');
-    } else if (tab === 'contacts') {
-      members.classList.add('open');
-      sidebar.classList.remove('open');
-    } else {
-      sidebar.classList.remove('open');
-      members.classList.remove('open');
+    document.querySelectorAll('.lp-footer-btn').forEach(b => b.classList.remove('active'));
+    document.getElementById('tab-' + tab).classList.add('active');
+    document.getElementById('contacts-panel').classList.add('hidden');
+    document.getElementById('profile-panel').classList.add('hidden');
+    if (tab === 'contacts') {
+      document.getElementById('contacts-panel').classList.remove('hidden');
+    } else if (tab === 'profile') {
+      document.getElementById('profile-panel').classList.remove('hidden');
+      const user = State.getState('currentUser');
+      if (user) {
+        const av = document.getElementById('profile-avatar');
+        av.textContent = user.avatar;
+        av.style.background = _strColor(user.username);
+        document.getElementById('profile-name').textContent = user.username;
+        document.getElementById('profile-role').textContent = user.isAdmin ? '👑 Администратор' : '👤 Участник';
+      }
     }
   }
 };
+function _strColor(str) {
+  let h = 5381;
+  for (let i = 0; i < str.length; i++) h = ((h << 5) + h) ^ str.charCodeAt(i);
+  return `hsl(${Math.abs(h) % 360}, 60%, 45%)`;
+}
 </script>
-
 </body>
 </html>

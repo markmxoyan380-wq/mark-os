@@ -312,9 +312,9 @@ const SocketEngine = (function () {
   }
 
   /** Отправка сообщения */
-  function sendMessage(roomId, text) {
+  function sendMessage(roomId, text, meta) {
     if (!socket) return;
-    socket.emit('send_message', { roomId, text });
+    socket.emit('send_message', { roomId, text, mediaUrl: meta?.mediaUrl, mediaType: meta?.mediaType });
   }
 
   /** Переключение комнаты */
@@ -367,30 +367,31 @@ const UI = (function () {
   function init() {
     $.loginScreen    = document.getElementById('login-screen');
     $.chatScreen     = document.getElementById('chat-screen');
-    $.loginForm      = document.getElementById('login-form');
     $.usernameInput  = document.getElementById('username-input');
     $.loginBtn       = document.getElementById('login-btn');
-
-    $.roomList       = document.getElementById('room-list');
+    $.chatList       = document.getElementById('chat-list');
     $.userList       = document.getElementById('user-list');
     $.messageList    = document.getElementById('message-list');
     $.messageInput   = document.getElementById('message-input');
     $.sendBtn        = document.getElementById('send-btn');
-    $.roomTitle      = document.getElementById('room-title');
-    $.roomSubtitle   = document.getElementById('room-subtitle');
+    $.chatHeaderTitle = document.getElementById('chat-header-title');
+    $.chatHeaderStatus = document.getElementById('chat-header-status');
+    $.chatHeaderAvatar = document.getElementById('chat-header-avatar');
     $.typingIndicator = document.getElementById('typing-indicator');
     $.toastContainer = document.getElementById('toast-container');
-    $.statusDot      = document.getElementById('status-dot');
-    $.latencyDisplay = document.getElementById('latency');
     $.onlineCount    = document.getElementById('online-count');
     $.channelBadge   = document.getElementById('channel-badge');
-    $.sidebarToggle  = document.getElementById('sidebar-toggle');
-    $.sidebar        = document.getElementById('sidebar');
-    $.membersSidebar = document.getElementById('members-sidebar');
-    $.membersToggle  = document.getElementById('members-toggle');
+    $.activeChat     = document.getElementById('active-chat');
+    $.emptyState     = document.getElementById('empty-state');
+    $.leftPanel      = document.getElementById('left-panel');
+    $.rightPanel     = document.getElementById('right-panel');
+    $.backBtn        = document.getElementById('back-btn');
+    $.attachBtn      = document.getElementById('attach-btn');
+    $.fileInput      = document.getElementById('file-input');
 
     _bindScrollListener();
     _bindInputListeners();
+    _bindMobileNav();
   }
 
   /**
@@ -412,14 +413,16 @@ const UI = (function () {
    * Группирует по типу: global → channels → dm.
    */
   function renderRoomList() {
-    const rooms       = State.getState('rooms');
+    const rooms        = State.getState('rooms');
+    const allMessages  = State.getState('messages');
     const activeRoomId = State.getState('activeRoomId');
-    $.roomList.innerHTML = '';
+    if (!$.chatList) return;
+    $.chatList.innerHTML = '';
 
     const sections = [
-      { type: 'global',  label: 'Основное'   },
-      { type: 'channel', label: 'Каналы'     },
-      { type: 'dm',      label: 'Сообщения'  },
+      { type: 'global',  label: 'Основное'  },
+      { type: 'channel', label: 'Каналы'    },
+      { type: 'dm',      label: 'Переписки' },
     ];
 
     sections.forEach(({ type, label }) => {
@@ -427,33 +430,39 @@ const UI = (function () {
       rooms.forEach(r => { if (r.type === type) filtered.push(r); });
       if (!filtered.length) return;
 
-      // Секция-заголовок
-      const section = document.createElement('div');
-      section.className = 'room-section';
-      section.innerHTML = `<span class="room-section-label">${label}</span>`;
-      $.roomList.appendChild(section);
+      const lbl = document.createElement('div');
+      lbl.className = 'chat-section-label';
+      lbl.textContent = label;
+      $.chatList.appendChild(lbl);
 
-      // Элементы комнат
       filtered.forEach(room => {
-        const el = document.createElement('div');
-        el.className = 'room-item' + (room.id === activeRoomId ? ' active' : '');
-        el.dataset.roomId = room.id;
+        const msgs    = allMessages.get(room.id) || [];
+        const lastMsg = msgs[msgs.length - 1];
+        const preview = lastMsg
+          ? (lastMsg.author + ': ' + lastMsg.text).slice(0, 48)
+          : 'Нет сообщений';
+        const timeStr = lastMsg ? formatTime(lastMsg.timestamp) : '';
 
         const icon = room.type === 'global'  ? '🌐'
-                   : room.type === 'channel' ? '📢'
-                   : '💬';
+                   : room.type === 'channel' ? '📢' : '💬';
 
+        const el = document.createElement('div');
+        el.className = 'chat-item' + (room.id === activeRoomId ? ' active' : '');
         el.innerHTML = `
-          <span class="room-icon">${icon}</span>
-          <span class="room-name">${escapeHTML(room.name)}</span>
-          ${room._unread ? '<span class="unread-dot"></span>' : ''}
+          <div class="chat-item-avatar" style="background:${stringToColor(room.name)}">
+            ${icon}
+          </div>
+          <div class="chat-item-body">
+            <div class="chat-item-top">
+              <span class="chat-item-name">${escapeHTML(room.name)}</span>
+              <span class="chat-item-time">${timeStr}</span>
+            </div>
+            <div class="chat-item-preview ${room._unread ? 'unread' : ''}">${escapeHTML(preview)}</div>
+          </div>
+          ${room._unread ? '<div class="chat-item-badge">•</div>' : ''}
         `;
-
-        el.addEventListener('click', () => {
-          AppController.switchRoom(room.id);
-        });
-
-        $.roomList.appendChild(el);
+        el.addEventListener('click', () => AppController.switchRoom(room.id));
+        $.chatList.appendChild(el);
       });
     });
   }
@@ -464,36 +473,30 @@ const UI = (function () {
   function renderUserList() {
     const users       = State.getState('users');
     const currentUser = State.getState('currentUser');
-
+    if (!$.userList) return;
     $.userList.innerHTML = '';
-    $.onlineCount.textContent = users.size;
+    if ($.onlineCount) $.onlineCount.textContent = users.size;
 
     users.forEach(user => {
       const isMe = currentUser && user.id === currentUser.id;
       const el   = document.createElement('div');
-      el.className = 'user-item' + (isMe ? ' me' : '');
-      el.dataset.userId = user.id;
+      el.className = 'user-item';
 
       el.innerHTML = `
-        <div class="user-avatar" style="background: ${stringToColor(user.username)}">
+        <div class="user-av" style="background:${stringToColor(user.username)}">
           ${escapeHTML(user.avatar || user.username.slice(0,2).toUpperCase())}
         </div>
         <div class="user-info">
-          <span class="user-name">${escapeHTML(user.username)}${isMe ? ' (ты)' : ''}</span>
-          ${user.isAdmin ? '<span class="admin-badge">ADMIN</span>' : ''}
+          <div class="user-name">${escapeHTML(user.username)}${isMe ? ' <span style="color:var(--text-3)">(ты)</span>' : ''}</div>
+          ${user.isAdmin ? '<div class="admin-tag">ADMIN</div>' : ''}
         </div>
-        <div class="user-online-dot"></div>
+        <div class="user-dot"></div>
       `;
 
-      // Клик на пользователя → открыть DM (не на себя)
       if (!isMe) {
-        el.addEventListener('click', () => {
-          SocketEngine.openDM(user.id);
-        });
-        el.title = `Написать ${user.username}`;
-        el.style.cursor = 'pointer';
+        el.addEventListener('click', () => { SocketEngine.openDM(user.id); });
+        el.title = 'Написать ' + user.username;
       }
-
       $.userList.appendChild(el);
     });
   }
@@ -522,35 +525,40 @@ const UI = (function () {
       const isCompact  = sameAuthor && closeTime;
 
       const el = document.createElement('div');
-      el.className = `message-wrapper ${isMe ? 'mine' : 'theirs'} ${isCompact ? 'compact' : ''}`;
+      el.className = `msg-wrapper ${isMe ? 'mine' : 'theirs'} ${isCompact ? 'compact' : ''}`.trim();
       el.dataset.messageId = msg.id;
 
       const time = formatTime(msg.timestamp);
 
+      const mediaHTML = _renderMedia(msg);
       if (!isCompact) {
         el.innerHTML = `
-          <div class="msg-avatar" style="background: ${stringToColor(msg.author)}">
+          <div class="msg-av" style="background:${stringToColor(msg.author)}">
             ${escapeHTML(msg.avatar || msg.author.slice(0,2).toUpperCase())}
           </div>
           <div class="msg-body">
-            <div class="msg-header">
-              <span class="msg-author ${msg.isAdmin ? 'is-admin' : ''}">${escapeHTML(msg.author)}</span>
-              ${msg.isAdmin ? '<span class="msg-admin-crown">👑</span>' : ''}
-              <span class="msg-time">${time}</span>
-            </div>
+            ${!isMe ? `<div class="msg-name">${escapeHTML(msg.author)}${msg.isAdmin ? ' 👑' : ''}</div>` : ''}
             <div class="msg-bubble">
-              <p class="msg-text">${formatMessageText(msg.text)}</p>
+              ${mediaHTML}
+              ${msg.text ? `<p class="msg-text">${formatMessageText(msg.text)}</p>` : ''}
+              <div class="msg-meta">
+                <span class="msg-time">${time}</span>
+                ${isMe ? '<span class="msg-status">✓✓</span>' : ''}
+              </div>
             </div>
           </div>
         `;
       } else {
-        // Компактный вид — без аватара и имени
         el.innerHTML = `
-          <div class="msg-avatar-spacer"></div>
+          <div class="msg-av-spacer"></div>
           <div class="msg-body">
             <div class="msg-bubble">
-              <p class="msg-text">${formatMessageText(msg.text)}</p>
-              <span class="msg-time-compact">${time}</span>
+              ${mediaHTML}
+              ${msg.text ? `<p class="msg-text">${formatMessageText(msg.text)}</p>` : ''}
+              <div class="msg-meta">
+                <span class="msg-time">${time}</span>
+                ${isMe ? '<span class="msg-status">✓✓</span>' : ''}
+              </div>
             </div>
           </div>
         `;
@@ -610,28 +618,35 @@ const UI = (function () {
    */
   function updateRoomHeader(room) {
     if (!room) return;
-    $.roomTitle.textContent = room.name;
+    if ($.chatHeaderTitle) $.chatHeaderTitle.textContent = room.name;
 
-    const typeLabels = {
-      global:  '🌐 Общий чат · все участники',
-      channel: '📢 Канал · только чтение',
-      dm:      '💬 Личное сообщение',
-    };
-    $.roomSubtitle.textContent = typeLabels[room.type] || '';
+    const statusLabels = { global: 'общий чат', channel: 'канал', dm: 'личные сообщения' };
+    if ($.chatHeaderStatus) $.chatHeaderStatus.textContent = statusLabels[room.type] || '';
 
-    // Показываем badge для каналов (только admin может писать)
-    const currentUser = State.getState('currentUser');
-    if (room.type === 'channel' && (!currentUser || !currentUser.isAdmin)) {
-      $.channelBadge.classList.remove('hidden');
-      $.messageInput.disabled = true;
-      $.messageInput.placeholder = 'Только администратор может писать в каналы';
-      $.sendBtn.disabled = true;
-    } else {
-      $.channelBadge.classList.add('hidden');
-      $.messageInput.disabled = false;
-      $.messageInput.placeholder = 'Написать сообщение...';
-      $.sendBtn.disabled = false;
+    if ($.chatHeaderAvatar) {
+      const icon = room.type === 'global' ? '🌐' : room.type === 'channel' ? '📢' : '💬';
+      $.chatHeaderAvatar.textContent = icon;
+      $.chatHeaderAvatar.style.background = stringToColor(room.name);
     }
+
+    // Показываем empty/active
+    if ($.emptyState) $.emptyState.classList.add('hidden');
+    if ($.activeChat) $.activeChat.classList.remove('hidden');
+
+    // Мобиль — показываем правую панель
+    if ($.rightPanel) $.rightPanel.classList.add('visible-mobile');
+    if ($.leftPanel) $.leftPanel.classList.add('hidden-mobile');
+
+    const currentUser = State.getState('currentUser');
+    const isReadonly  = room.type === 'channel' && (!currentUser || !currentUser.isAdmin);
+    if ($.channelBadge) {
+      isReadonly ? $.channelBadge.classList.remove('hidden') : $.channelBadge.classList.add('hidden');
+    }
+    if ($.messageInput) {
+      $.messageInput.disabled = isReadonly;
+      $.messageInput.placeholder = isReadonly ? '' : 'Сообщение...';
+    }
+    if ($.sendBtn) $.sendBtn.disabled = isReadonly;
   }
 
   /**
@@ -797,16 +812,24 @@ const UI = (function () {
       }
     });
 
-    // Мобильный sidebar toggle
-    if ($.sidebarToggle) {
-      $.sidebarToggle.addEventListener('click', () => {
-        $.sidebar.classList.toggle('open');
+  }
+
+  function _bindMobileNav() {
+    // Кнопка назад на мобиле
+    if ($.backBtn) {
+      $.backBtn.addEventListener('click', () => {
+        if ($.rightPanel) $.rightPanel.classList.remove('visible-mobile');
+        if ($.leftPanel)  $.leftPanel.classList.remove('hidden-mobile');
       });
     }
 
-    if ($.membersToggle) {
-      $.membersToggle.addEventListener('click', () => {
-        $.membersSidebar.classList.toggle('open');
+    // Прикрепить файл
+    if ($.attachBtn && $.fileInput) {
+      $.attachBtn.addEventListener('click', () => $.fileInput.click());
+      $.fileInput.addEventListener('change', (e) => {
+        const files = Array.from(e.target.files);
+        files.forEach(file => AppController.sendFile(file));
+        $.fileInput.value = '';
       });
     }
   }
@@ -893,6 +916,17 @@ const UI = (function () {
     }
     const hue = Math.abs(hash) % 360;
     return `hsl(${hue}, 60%, 45%)`;
+  }
+
+  function _renderMedia(msg) {
+    if (!msg.mediaUrl) return '';
+    if (msg.mediaType === 'image') {
+      return `<img class="msg-image" src="${escapeHTML(msg.mediaUrl)}" alt="фото" onclick="window.open(this.src,'_blank')" loading="lazy" />`;
+    }
+    if (msg.mediaType === 'video') {
+      return `<video class="msg-video" src="${escapeHTML(msg.mediaUrl)}" controls playsinline></video>`;
+    }
+    return '';
   }
 
   return {
@@ -1045,8 +1079,6 @@ const AppController = (function () {
     if (!text || !activeRoom) return;
 
     SocketEngine.sendMessage(activeRoom, text);
-
-    // Очищаем инпут
     input.value = '';
     input.style.height = 'auto';
     input.focus();
@@ -1090,7 +1122,31 @@ const AppController = (function () {
     if (sidebar) sidebar.classList.remove('open');
   }
 
-  return { init, handleLogin, sendMessage, switchRoom };
+  /**
+   * Отправка файла (фото/видео) — конвертируем в base64 и шлём через сокет.
+   * В продакшне здесь будет upload на S3/Cloudinary.
+   */
+  function sendFile(file) {
+    const activeRoom = State.getState('activeRoomId');
+    if (!activeRoom) return;
+
+    const isImage = file.type.startsWith('image/');
+    const isVideo = file.type.startsWith('video/');
+    if (!isImage && !isVideo) { UI.showToast('Поддерживаются только фото и видео', 'error'); return; }
+    if (file.size > 10 * 1024 * 1024) { UI.showToast('Файл слишком большой (макс. 10MB)', 'error'); return; }
+
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      SocketEngine.sendMessage(activeRoom, '', {
+        mediaUrl:  e.target.result,
+        mediaType: isImage ? 'image' : 'video',
+        fileName:  file.name,
+      });
+    };
+    reader.readAsDataURL(file);
+  }
+
+  return { init, handleLogin, sendMessage, sendFile, switchRoom };
 })();
 
 // ─── ЗАПУСК ──────────────────────────────────────────────────
