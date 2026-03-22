@@ -2,7 +2,7 @@
 <html lang="ru">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
   <meta name="theme-color" content="#0d0f14" />
   <title>MARK OS — Мессенджер</title>
 
@@ -139,6 +139,45 @@
 
 <!-- Основной движок приложения -->
 <script src="/app.js"></script>
+
+
+<!-- Мобильная нижняя навигация -->
+<nav id="mobile-nav">
+  <button class="mobile-nav-btn active" id="nav-chats" onclick="MobileNav.show('chats')">
+    <span class="nav-icon">💬</span>
+    <span>Чаты</span>
+  </button>
+  <button class="mobile-nav-btn" id="nav-contacts" onclick="MobileNav.show('contacts')">
+    <span class="nav-icon">👥</span>
+    <span>Контакты</span>
+  </button>
+  <button class="mobile-nav-btn" id="nav-settings" onclick="MobileNav.show('settings')">
+    <span class="nav-icon">⚙️</span>
+    <span>Настройки</span>
+  </button>
+</nav>
+
+<script>
+// Мобильная навигация
+const MobileNav = {
+  show(tab) {
+    document.querySelectorAll('.mobile-nav-btn').forEach(b => b.classList.remove('active'));
+    document.getElementById('nav-' + tab).classList.add('active');
+    const sidebar = document.getElementById('sidebar');
+    const members = document.getElementById('members-sidebar');
+    if (tab === 'chats') {
+      sidebar.classList.add('open');
+      members.classList.remove('open');
+    } else if (tab === 'contacts') {
+      members.classList.add('open');
+      sidebar.classList.remove('open');
+    } else {
+      sidebar.classList.remove('open');
+      members.classList.remove('open');
+    }
+  }
+};
+</script>
 
 </body>
 </html>
