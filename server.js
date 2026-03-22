@@ -14,7 +14,7 @@ const fs   = require('fs');
 const { v4: uuidv4 } = require('uuid');
 
 // ─── КОНФИГ ─────────────────────────────────────────────────
-const PORT          = process.env.PORT || 3000;
+const PORT          = process.env.PORT || 8080;
 const MAX_HISTORY   = 100;   // максимум сообщений на комнату в памяти
 const TYPING_EXPIRE = 4000;  // мс — после этого индикатор набора гасится
 
