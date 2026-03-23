@@ -43,6 +43,7 @@ const State = createStateManager({
   editingMsg:     null,   // { id, text }
   theme:          "dark",
   msgCount:       0,
+  loginAvatarUrl: null,
 });
 
 // ============================================================
@@ -141,6 +142,19 @@ const SocketEngine = (function () {
       UI.renderChatList();
     });
 
+    socket.on("group_created", ({ room, history }) => {
+      State.dispatch("rooms", prev => { const n = new Map(prev); n.set(room.id, room); return n; });
+      State.dispatch("messages", prev => { const n = new Map(prev); n.set(room.id, history); return n; });
+      AppController.switchRoom(room.id);
+      UI.showToast(`Группа "${room.name}" создана`, "success");
+    });
+
+    socket.on("added_to_group", ({ room, by }) => {
+      State.dispatch("rooms", prev => { const n = new Map(prev); n.set(room.id, room); return n; });
+      UI.showToast(`${by.username} добавил вас в группу "${room.name}"`, "info");
+      UI.renderChatList();
+    });
+
     socket.on("user_typing", ({ userId, username, roomId }) => {
       if (roomId !== State.getState("activeRoomId")) return;
       State.dispatch("typingUsers", prev => { const n = new Set(prev); n.add(userId); return n; });
@@ -175,7 +189,7 @@ const SocketEngine = (function () {
     new Notification(`MARK OS — ${msg.author}`, { body: msg.text || "📎 Медиа", icon: "/favicon.ico" });
   }
 
-  function auth(username)                        { socket?.emit("auth", { username }); }
+  function auth(username, avatarUrl)             { socket?.emit("auth", { username, avatarUrl }); }
   function sendMessage(roomId, text, meta)        { socket?.emit("send_message", { roomId, text, mediaUrl: meta?.mediaUrl || null, mediaType: meta?.mediaType || null, replyToId: meta?.replyToId || null }); }
   function editMessage(roomId, messageId, text)   { socket?.emit("edit_message", { roomId, messageId, newText: text }); }
   function deleteMessage(roomId, messageId)        { socket?.emit("delete_message", { roomId, messageId }); }
@@ -186,8 +200,9 @@ const SocketEngine = (function () {
   function typingStop(roomId)                      { socket?.emit("typing_stop", { roomId }); }
   function ping()                                  { socket?.emit("ping_server"); }
   function updateProfile(data)                     { socket?.emit("update_profile", data); }
+  function createGroup(name, memberIds)            { socket?.emit("create_group", { name, memberIds }); }
 
-  return { connect, auth, sendMessage, editMessage, deleteMessage, reactMessage, joinRoom, openDM, typingStart, typingStop, ping, updateProfile };
+  return { connect, auth, sendMessage, editMessage, deleteMessage, reactMessage, joinRoom, openDM, typingStart, typingStop, ping, updateProfile, createGroup };
 })();
 
 // ============================================================
@@ -291,7 +306,7 @@ const UI = (function () {
         const lastMsg = msgs[msgs.length - 1];
         const preview = lastMsg ? `${lastMsg.author}: ${lastMsg.text || "📎"}`.slice(0, 50) : "Нет сообщений";
         const timeStr = lastMsg ? _fmtTime(lastMsg.timestamp) : "";
-        const icon    = room.type === "global" ? "🌐" : room.type === "channel" ? "📢" : "💬";
+        const icon    = room.type === "global" ? "🌐" : room.type === "channel" ? "📢" : room.type === "group" ? "👥" : "💬";
 
         const el = document.createElement("div");
         el.className = "chat-item" + (room.id === activeRoomId ? " active" : "");
@@ -313,6 +328,33 @@ const UI = (function () {
   }
 
   // ── СПИСОК ПОЛЬЗОВАТЕЛЕЙ ───────────────────────────────────
+  function _avatarHTML(user, size = 36) {
+    if (user.avatarUrl) return `<img src="${_esc(user.avatarUrl)}" style="width:${size}px;height:${size}px;object-fit:cover;border-radius:50%;flex-shrink:0" />`;
+    return `<div class="user-av" style="background:${user.avatarColor || _color(user.username)};width:${size}px;height:${size}px">${_esc(user.avatar)}</div>`;
+  }
+
+  function renderStoriesBar() {
+    const bar   = document.getElementById("stories-bar");
+    if (!bar) return;
+    const users = State.getState("users");
+    const me    = State.getState("currentUser");
+    const withStory = [];
+    users.forEach(u => { if (u.story) withStory.push(u); });
+    if (!withStory.length) { bar.style.display = "none"; return; }
+    bar.style.display = "flex";
+    bar.innerHTML = withStory.map(u => `
+      <div class="story-item ${me && u.id === me.id ? "story-mine" : ""}" onclick="StoryViewer.show(${JSON.stringify(u).replace(/"/g, '&quot;')})">
+        <div class="story-av-wrap">
+          ${u.avatarUrl
+            ? `<img src="${_esc(u.avatarUrl)}" class="story-av-img"/>`
+            : `<div class="story-av-placeholder" style="background:${_color(u.username)}">${_esc(u.avatar)}</div>`
+          }
+        </div>
+        <span class="story-name">${_esc(u.username.split(" ")[0])}</span>
+      </div>
+    `).join("");
+  }
+
   function renderUserList() {
     const users = State.getState("users");
     const me    = State.getState("currentUser");
@@ -325,7 +367,7 @@ const UI = (function () {
       const el   = document.createElement("div");
       el.className = "user-item";
       el.innerHTML = `
-        <div class="user-av" style="background:${user.avatarColor || _color(user.username)}">${_esc(user.avatar)}</div>
+        ${_avatarHTML(user, 36)}
         <div class="user-info">
           <div class="user-name">${_esc(user.username)}${isMe ? ' <span style="color:var(--text-3)">(ты)</span>' : ""}</div>
           ${user.bio ? `<div class="user-bio">${_esc(user.bio)}</div>` : ""}
@@ -340,6 +382,7 @@ const UI = (function () {
       }
       $.userList.appendChild(el);
     });
+    renderStoriesBar();
   }
 
   // ── СООБЩЕНИЯ ──────────────────────────────────────────────
@@ -377,8 +420,11 @@ const UI = (function () {
 
       const reactHTML = _renderReactions(msg, roomId);
 
-      const avatarHTML = compact ? `<div class="msg-av-spacer"></div>` : `
-        <div class="msg-av" style="background:${msg.avatarColor || _color(msg.author)}">${_esc(msg.avatar)}</div>`;
+      const avatarHTML = compact ? `<div class="msg-av-spacer"></div>` : (
+        msg.avatarUrl
+          ? `<img src="${_esc(msg.avatarUrl)}" style="width:32px;height:32px;border-radius:50%;object-fit:cover;flex-shrink:0;align-self:flex-end" />`
+          : `<div class="msg-av" style="background:${msg.avatarColor || _color(msg.author)}">${_esc(msg.avatar)}</div>`
+      );
 
       el.innerHTML = `
         ${avatarHTML}
@@ -482,11 +528,21 @@ const UI = (function () {
     const user = State.getState("currentUser");
     if (!user || !$.profileModal) return;
     $.profileModal.classList.remove("hidden");
-    if ($.profileAvatar)   { $.profileAvatar.textContent = user.avatar; $.profileAvatar.style.background = user.avatarColor || _color(user.username); }
+    if ($.profileAvatar) {
+      if (user.avatarUrl) {
+        $.profileAvatar.innerHTML = `<img src="${user.avatarUrl}" style="width:100%;height:100%;object-fit:cover;border-radius:50%"/>`;
+      } else {
+        $.profileAvatar.innerHTML = "";
+        $.profileAvatar.textContent   = user.avatar;
+        $.profileAvatar.style.background = user.avatarColor || _color(user.username);
+      }
+    }
     if ($.profileName)     $.profileName.textContent     = user.username;
     if ($.profileRole)     $.profileRole.textContent     = user.isAdmin ? "👑 Администратор" : "👤 Участник";
     if ($.profileBioInput) $.profileBioInput.value       = user.bio || "";
     if ($.profileMsgCount) $.profileMsgCount.textContent = State.getState("msgCount");
+    const storyInput = document.getElementById("profile-story-input");
+    if (storyInput) storyInput.value = user.story?.text || "";
   }
 
   function hideProfile() {
@@ -690,10 +746,12 @@ const UI = (function () {
 
     // Профиль — кнопка сохранить
     $.profileSaveBtn?.addEventListener("click", () => {
-      const bio = ($.profileBioInput?.value || "").trim().slice(0, 120);
-      SocketEngine.updateProfile({ bio });
+      const bio   = ($.profileBioInput?.value || "").trim().slice(0, 120);
+      const story = (document.getElementById("profile-story-input")?.value || "").trim().slice(0, 200);
+      SocketEngine.updateProfile({ bio, story: story || null });
       showToast("Профиль сохранён", "success");
       hideProfile();
+      renderStoriesBar();
     });
 
     // Поиск
@@ -709,6 +767,41 @@ const UI = (function () {
 
     // Запросить разрешение на уведомления
     requestNotifPermission();
+
+    // Аватар на экране входа
+    const loginAvatarInput   = document.getElementById("login-avatar-input");
+    const loginAvatarPreview = document.getElementById("login-avatar-preview");
+    loginAvatarInput?.addEventListener("change", e => {
+      const file = e.target.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = ev => {
+        State.dispatch("loginAvatarUrl", ev.target.result);
+        if (loginAvatarPreview) {
+          loginAvatarPreview.innerHTML = `<img src="${ev.target.result}" style="width:100%;height:100%;object-fit:cover;border-radius:50%"/>`;
+        }
+      };
+      reader.readAsDataURL(file);
+    });
+
+    // Аватар в профиле
+    const profileAvatarInput = document.getElementById("profile-avatar-input");
+    profileAvatarInput?.addEventListener("change", e => {
+      const file = e.target.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = ev => {
+        const url = ev.target.result;
+        SocketEngine.updateProfile({ avatarUrl: url });
+        const av = document.getElementById("profile-avatar");
+        if (av) av.innerHTML = `<img src="${url}" style="width:100%;height:100%;object-fit:cover;border-radius:50%"/>`;
+        UI.showToast("Аватар обновлён", "success");
+      };
+      reader.readAsDataURL(file);
+    });
+
+    // Поле истории в профиле
+    document.getElementById("profile-save-btn")?.addEventListener("click", () => {}, false);
   }
 
   // ── УТИЛИТЫ ─────────────────────────────────────────────────
@@ -748,7 +841,7 @@ const UI = (function () {
     renderChatList, renderUserList, renderMessages, renderTyping,
     updateHeader, showReplyBar, hideReplyBar, showEditBar, hideEditBar,
     showProfile, hideProfile, openMedia, hideCtxMenu,
-    showToast, updateLatency, markRoomUnread, playPing,
+    showToast, updateLatency, markRoomUnread, playPing, renderStoriesBar,
   };
 })();
 
@@ -768,7 +861,7 @@ const AppController = (function () {
     State.subscribe("screen",           s  => UI.switchScreen(s));
     State.subscribe("theme",            t  => UI.applyTheme(t));
     State.subscribe("rooms",            () => UI.renderChatList());
-    State.subscribe("users",            () => UI.renderUserList());
+    State.subscribe("users",            () => { UI.renderUserList(); });
     State.subscribe("messages",         () => UI.renderMessages());
     State.subscribe("typingUsers",      () => UI.renderTyping());
   }
@@ -787,14 +880,23 @@ const AppController = (function () {
       input?.addEventListener("animationend", () => input.classList.remove("shake"), { once: true });
       return;
     }
-    const btn = document.getElementById("login-btn");
+    const btn       = document.getElementById("login-btn");
+    const avatarUrl = State.getState("loginAvatarUrl");
     if (btn) { btn.disabled = true; btn.querySelector("span").textContent = "Подключение..."; }
 
     SocketEngine.connect();
     const check = setInterval(() => {
       const s = State.getState("connectionStatus");
-      if (s === "connected")    { clearInterval(check); SocketEngine.auth(username); if (btn) { btn.disabled = false; btn.querySelector("span").textContent = "Начать"; } }
-      if (s === "disconnected") { clearInterval(check); UI.showToast("Нет связи с сервером", "error"); if (btn) { btn.disabled = false; btn.querySelector("span").textContent = "Начать"; } }
+      if (s === "connected") {
+        clearInterval(check);
+        SocketEngine.auth(username, avatarUrl);
+        if (btn) { btn.disabled = false; btn.querySelector("span").textContent = "Начать"; }
+      }
+      if (s === "disconnected") {
+        clearInterval(check);
+        UI.showToast("Нет связи с сервером", "error");
+        if (btn) { btn.disabled = false; btn.querySelector("span").textContent = "Начать"; }
+      }
     }, 100);
   }
 

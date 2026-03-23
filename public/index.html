@@ -17,6 +17,13 @@
     <div class="login-logo">💬</div>
     <h1 class="login-title">MARK OS</h1>
     <p class="login-sub">Мессенджер нового поколения</p>
+    <!-- Выбор аватара -->
+    <div class="avatar-pick-wrap">
+      <div id="login-avatar-preview" class="avatar-preview">?</div>
+      <label for="login-avatar-input" class="avatar-pick-btn">📷 Выбрать фото</label>
+      <input type="file" id="login-avatar-input" accept="image/*" style="display:none"/>
+    </div>
+
     <div class="login-field">
       <input id="username-input" type="text" placeholder="Введите ваше имя..." maxlength="32" autocomplete="off" spellcheck="false"/>
     </div>
@@ -37,6 +44,15 @@
       </div>
       <button id="theme-toggle" class="icon-btn" title="Сменить тему">☀️</button>
     </div>
+
+    <!-- Истории -->
+    <div id="stories-bar" class="stories-bar"></div>
+
+    <!-- Кнопка создать группу -->
+    <button id="create-group-btn" class="create-group-btn" onclick="GroupModal.show()">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+      Новая группа
+    </button>
 
     <div id="chat-list" class="chat-list"></div>
 
@@ -154,7 +170,11 @@
       <button class="icon-btn" onclick="UI.hideProfile()">✕</button>
     </div>
     <div class="profile-body">
-      <div id="profile-avatar" class="profile-avatar"></div>
+      <div class="profile-avatar-wrap">
+        <div id="profile-avatar" class="profile-avatar"></div>
+        <label for="profile-avatar-input" class="avatar-edit-btn" title="Сменить аватар">📷</label>
+        <input type="file" id="profile-avatar-input" accept="image/*" style="display:none"/>
+      </div>
       <div id="profile-name" class="profile-name"></div>
       <div id="profile-role" class="profile-role"></div>
       <div class="profile-stat-row">
@@ -166,6 +186,38 @@
       </div>
       <button id="profile-save-btn" class="btn-primary">Сохранить</button>
     </div>
+  </div>
+</div>
+
+<!-- GROUP CREATE MODAL -->
+<div id="group-modal" class="modal-overlay hidden" onclick="if(event.target===this)GroupModal.hide()">
+  <div class="modal-card">
+    <div class="modal-header">
+      <h2>Новая группа</h2>
+      <button class="icon-btn" onclick="GroupModal.hide()">✕</button>
+    </div>
+    <div class="profile-body">
+      <div class="profile-field">
+        <label>Название группы</label>
+        <input id="group-name-input" type="text" placeholder="Например: Друзья, Работа..." maxlength="50" style="width:100%;background:var(--bg-input);border:1.5px solid var(--border-2);border-radius:var(--r);padding:10px 12px;font-size:14px;color:var(--text);"/>
+      </div>
+      <div class="profile-field">
+        <label>Добавить участников</label>
+        <div id="group-members-list" class="group-members-list"></div>
+      </div>
+      <button id="group-create-btn" class="btn-primary">Создать группу</button>
+    </div>
+  </div>
+</div>
+
+<!-- STORY VIEWER -->
+<div id="story-viewer" class="modal-overlay hidden" onclick="if(event.target===this)StoryViewer.hide()">
+  <div class="story-card">
+    <div class="story-av" id="story-viewer-av"></div>
+    <div class="story-author" id="story-viewer-author"></div>
+    <div class="story-text" id="story-viewer-text"></div>
+    <div class="story-time" id="story-viewer-time"></div>
+    <button class="media-close" onclick="StoryViewer.hide()">✕</button>
   </div>
 </div>
 
@@ -188,6 +240,77 @@ const LP = {
     if (tab === "profile")  UI.showProfile();
   }
 };
+</script>
+
+<script>
+// Менеджер создания групп
+const GroupModal = {
+  selectedMembers: new Set(),
+  show() {
+    document.getElementById("group-modal").classList.remove("hidden");
+    const list = document.getElementById("group-members-list");
+    list.innerHTML = "";
+    this.selectedMembers.clear();
+    const users = State.getState("users");
+    const me    = State.getState("currentUser");
+    users.forEach(user => {
+      if (me && user.id === me.id) return;
+      const el = document.createElement("div");
+      el.className = "group-member-item";
+      el.dataset.uid = user.id;
+      const av = user.avatarUrl
+        ? `<img src="${user.avatarUrl}" class="user-av" style="object-fit:cover"/>`
+        : `<div class="user-av" style="background:${_strColor(user.username)}">${user.avatar}</div>`;
+      el.innerHTML = `${av}<span>${user.username}</span><span class="member-check">☐</span>`;
+      el.addEventListener("click", () => {
+        if (this.selectedMembers.has(user.id)) {
+          this.selectedMembers.delete(user.id);
+          el.classList.remove("selected");
+          el.querySelector(".member-check").textContent = "☐";
+        } else {
+          this.selectedMembers.add(user.id);
+          el.classList.add("selected");
+          el.querySelector(".member-check").textContent = "☑";
+        }
+      });
+      list.appendChild(el);
+    });
+    document.getElementById("group-create-btn").onclick = () => this.create();
+  },
+  hide() { document.getElementById("group-modal").classList.add("hidden"); },
+  create() {
+    const name = document.getElementById("group-name-input").value.trim();
+    if (name.length < 2) { UI.showToast("Введите название группы", "error"); return; }
+    SocketEngine.createGroup(name, Array.from(this.selectedMembers));
+    this.hide();
+  }
+};
+
+// Просмотр историй
+const StoryViewer = {
+  show(user) {
+    if (!user.story) return;
+    document.getElementById("story-viewer").classList.remove("hidden");
+    const av = document.getElementById("story-viewer-av");
+    if (user.avatarUrl) {
+      av.innerHTML = `<img src="${user.avatarUrl}" style="width:100%;height:100%;object-fit:cover;border-radius:50%"/>`;
+    } else {
+      av.textContent = user.avatar;
+      av.style.background = _strColor(user.username);
+    }
+    document.getElementById("story-viewer-author").textContent = user.username;
+    document.getElementById("story-viewer-text").textContent   = user.story.text;
+    const mins = Math.floor((Date.now() - user.story.ts) / 60000);
+    document.getElementById("story-viewer-time").textContent   = mins < 60 ? `${mins} мин. назад` : `${Math.floor(mins/60)} ч. назад`;
+  },
+  hide() { document.getElementById("story-viewer").classList.add("hidden"); }
+};
+
+function _strColor(str) {
+  let h = 5381;
+  for (let i = 0; i < str.length; i++) h = ((h << 5) + h) ^ str.charCodeAt(i);
+  return `hsl(${Math.abs(h) % 360},55%,42%)`;
+}
 </script>
 </body>
 </html>

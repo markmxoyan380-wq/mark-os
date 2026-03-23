@@ -24,7 +24,7 @@ function initRooms() {
     { id: "global",     type: "global",  name: "# Главный зал" },
     { id: "ch_news",    type: "channel", name: "📢 Новости"    },
     { id: "ch_updates", type: "channel", name: "🔧 Обновления" },
-  ].forEach(r => Store.rooms.set(r.id, { ...r, members: new Set(), history: [] }));
+  ].forEach(r => Store.rooms.set(r.id, { ...r, members: new Set(), history: [], createdAt: Date.now() }));
 }
 
 // ── HTTP (статика) ──────────────────────────────────────────
@@ -60,7 +60,7 @@ const io = new Server(server, { cors: { origin: "*" }, pingTimeout: 60000 });
 io.on("connection", (socket) => {
 
   // АВТОРИЗАЦИЯ
-  socket.on("auth", ({ username, bio, theme }) => {
+  socket.on("auth", ({ username, bio, theme, avatarUrl }) => {
     if (!username || typeof username !== "string") return;
     const name    = username.trim().slice(0, 32);
     const userId  = uuidv4();
@@ -71,12 +71,14 @@ io.on("connection", (socket) => {
       username: name,
       bio:      (bio || "").slice(0, 120),
       avatar:   name.slice(0, 2).toUpperCase(),
+      avatarUrl: avatarUrl || null,
       avatarColor: null,
       isAdmin,
       online:   true,
       lastSeen: Date.now(),
       theme:    theme || "dark",
       joinedAt: Date.now(),
+      story:    null,
     };
 
     Store.users.set(socket.id, user);
@@ -181,14 +183,53 @@ io.on("connection", (socket) => {
   });
 
   // ОБНОВЛЕНИЕ ПРОФИЛЯ
-  socket.on("update_profile", ({ bio, theme, avatarColor }) => {
+  socket.on("update_profile", ({ bio, theme, avatarColor, avatarUrl, story }) => {
     const user = Store.users.get(socket.id);
     if (!user) return;
-    if (bio      !== undefined) user.bio         = (bio || "").slice(0, 120);
-    if (theme    !== undefined) user.theme        = theme;
-    if (avatarColor !== undefined) user.avatarColor = avatarColor;
+    if (bio         !== undefined) user.bio         = (bio || "").slice(0, 120);
+    if (theme       !== undefined) user.theme        = theme;
+    if (avatarColor !== undefined) user.avatarColor  = avatarColor;
+    if (avatarUrl   !== undefined) user.avatarUrl    = avatarUrl;
+    if (story       !== undefined) user.story        = story ? { text: story, ts: Date.now() } : null;
     socket.emit("profile_updated", { user: publicUser(user) });
     socket.broadcast.emit("user_updated", { user: publicUser(user) });
+  });
+
+  // СОЗДАНИЕ ГРУППЫ
+  socket.on("create_group", ({ name, memberIds }) => {
+    const creator = Store.users.get(socket.id);
+    if (!creator) return;
+    if (!name || name.trim().length < 2) { socket.emit("error_event", { message: "Название группы слишком короткое" }); return; }
+    const groupId = "grp_" + uuidv4().slice(0, 8);
+    const group = {
+      id: groupId,
+      type: "group",
+      name: name.trim().slice(0, 50),
+      creatorId: creator.id,
+      members: new Set(),
+      history: [],
+      createdAt: Date.now(),
+    };
+    Store.rooms.set(groupId, group);
+
+    // Добавляем создателя
+    joinRoom(socket, groupId);
+
+    // Добавляем других участников
+    (memberIds || []).forEach(uid => {
+      const sid = Store.userIndex.get(uid);
+      if (sid) {
+        const s = io.sockets.sockets.get(sid);
+        if (s) {
+          joinRoom(s, groupId);
+          s.emit("added_to_group", { room: { id: groupId, type: "group", name: group.name }, by: publicUser(creator) });
+        }
+      }
+    });
+
+    const roomData = { id: groupId, type: "group", name: group.name };
+    socket.emit("group_created", { room: roomData, history: [] });
+    io.to(groupId).emit("group_member_joined", { groupId, user: publicUser(creator) });
   });
 
   // JOIN ROOM
@@ -273,12 +314,14 @@ function clearTyping(roomId, userId, socket) {
 }
 
 function publicUser(u) {
-  return { id: u.id, username: u.username, avatar: u.avatar, avatarColor: u.avatarColor, bio: u.bio, isAdmin: u.isAdmin, online: u.online, lastSeen: u.lastSeen };
+  return { id: u.id, username: u.username, avatar: u.avatar, avatarUrl: u.avatarUrl, avatarColor: u.avatarColor, bio: u.bio, isAdmin: u.isAdmin, online: u.online, lastSeen: u.lastSeen, story: u.story };
 }
 
 function getRooms() {
   const r = [];
-  Store.rooms.forEach(room => { if (room.type !== "dm") r.push({ id: room.id, type: room.type, name: room.name, count: room.members.size }); });
+  Store.rooms.forEach(room => {
+    if (room.type !== "dm") r.push({ id: room.id, type: room.type, name: room.name, count: room.members.size });
+  });
   return r;
 }
 

@@ -314,3 +314,87 @@ a{color:var(--accent-h);}
   .msg-body{max-width:88%;}
   #input-area{padding:8px 10px;padding-bottom:max(8px,env(safe-area-inset-bottom));}
 }
+
+/* ─── АВАТАР НА ЭКРАНЕ ВХОДА ─────────────────────────────── */
+.avatar-pick-wrap { display:flex; justify-content:center; margin-bottom:20px; }
+.avatar-pick-label { cursor:pointer; }
+.avatar-pick-circle {
+  width:80px; height:80px; border-radius:50%;
+  background:var(--bg-input); border:2px dashed var(--border-2);
+  display:flex; flex-direction:column; align-items:center; justify-content:center;
+  gap:4px; transition:border-color var(--t), background var(--t);
+  overflow:hidden;
+}
+.avatar-pick-circle:hover { border-color:var(--accent); background:var(--bg-hover); }
+.avatar-pick-icon { font-size:22px; }
+.avatar-pick-text { font-size:10px; color:var(--text-3); }
+
+/* Аватар в профиле */
+.profile-avatar-wrap { position:relative; display:inline-block; }
+.avatar-edit-overlay {
+  position:absolute; inset:0; border-radius:50%;
+  background:rgba(0,0,0,.4); display:flex; align-items:center; justify-content:center;
+  font-size:20px; opacity:0; cursor:pointer;
+  transition:opacity var(--t);
+}
+.profile-avatar-wrap:hover .avatar-edit-overlay { opacity:1; }
+
+/* ─── ИСТОРИИ ────────────────────────────────────────────── */
+.stories-bar {
+  display:flex; gap:12px; padding:10px 14px 6px;
+  overflow-x:auto; flex-shrink:0;
+  scrollbar-width:none; border-bottom:1px solid var(--border);
+}
+.stories-bar::-webkit-scrollbar { display:none; }
+
+.story-item {
+  display:flex; flex-direction:column; align-items:center; gap:5px;
+  cursor:pointer; flex-shrink:0;
+}
+.story-av-wrap {
+  width:48px; height:48px; border-radius:50%;
+  border:2.5px solid var(--accent); padding:2px;
+  background:var(--bg); transition:transform var(--t);
+}
+.story-item:hover .story-av-wrap { transform:scale(1.05); }
+.story-item.story-mine .story-av-wrap { border-color:var(--online); }
+.story-av-img { width:100%; height:100%; border-radius:50%; object-fit:cover; }
+.story-av-placeholder {
+  width:100%; height:100%; border-radius:50%;
+  display:flex; align-items:center; justify-content:center;
+  font-size:14px; font-weight:700; color:#fff;
+}
+.story-name { font-size:10.5px; color:var(--text-2); max-width:52px; text-align:center; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+
+/* Story viewer */
+.story-card {
+  background:var(--bg-left); border-radius:20px;
+  padding:32px 28px 28px; width:320px; max-width:92vw;
+  display:flex; flex-direction:column; align-items:center; gap:14px;
+  position:relative; box-shadow:0 24px 80px rgba(0,0,0,.6);
+}
+.story-av { width:72px; height:72px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:24px; font-weight:700; color:#fff; }
+.story-author { font-size:17px; font-weight:700; }
+.story-text { font-size:15px; color:var(--text-2); text-align:center; line-height:1.6; }
+.story-time { font-size:11px; color:var(--text-3); }
+
+/* ─── КНОПКА СОЗДАТЬ ГРУППУ ──────────────────────────────── */
+.create-group-btn {
+  display:flex; align-items:center; gap:8px;
+  margin:6px 10px 2px; padding:8px 12px;
+  border-radius:var(--r-sm); color:var(--accent-h);
+  font-size:13px; font-weight:500;
+  transition:background var(--t);
+}
+.create-group-btn:hover { background:var(--bg-hover); }
+
+/* ─── ГРУППА — СПИСОК УЧАСТНИКОВ ────────────────────────── */
+.group-members-list { display:flex; flex-direction:column; gap:4px; max-height:200px; overflow-y:auto; }
+.group-member-item {
+  display:flex; align-items:center; gap:10px;
+  padding:8px 10px; border-radius:var(--r-sm);
+  cursor:pointer; transition:background var(--t);
+}
+.group-member-item:hover { background:var(--bg-hover); }
+.group-member-item.selected { background:var(--bg-active); }
+.member-check { margin-left:auto; font-size:16px; }
