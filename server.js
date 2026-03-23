@@ -384,7 +384,7 @@ io.on("connection", (socket) => {
 });
 
 // ── HELPERS ──────────────────────────────────────────────────
-function _loginSocket(socket, account) {
+function _loginSocket(socket, account, isNew = false) {
   // Считаем кол-во аккаунтов для определения первого admin
   const count   = db.prepare("SELECT COUNT(*) as c FROM accounts").get().c;
   const isAdmin = count <= 1;

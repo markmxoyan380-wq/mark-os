@@ -508,3 +508,41 @@ a{color:var(--accent-h);}
   cursor: pointer;
 }
 .btn-secondary:hover { background: var(--bg-hover); color: var(--text); }
+
+/* ─── ЭКРАН ПОКАЗА MARK ID ───────────────────────────────── */
+.id-reveal {
+  position: fixed; inset: 0;
+  display: flex; align-items: center; justify-content: center;
+  z-index: 200;
+}
+.id-reveal-card {
+  background: rgba(21,24,32,.96); backdrop-filter: blur(30px);
+  border: 1px solid var(--border-2); border-radius: 24px;
+  padding: 40px 36px; width: 360px; max-width: 92vw;
+  text-align: center; display: flex; flex-direction: column;
+  align-items: center; gap: 14px;
+  box-shadow: 0 32px 80px rgba(0,0,0,.6);
+  animation: fadeUp .3s both;
+}
+.id-reveal-icon { font-size: 48px; }
+.id-reveal-card h2 { font-size: 22px; font-weight: 700; }
+.id-reveal-sub { font-size: 13px; color: var(--text-2); line-height: 1.6; }
+
+.id-reveal-box {
+  font-family: monospace; font-size: 28px; font-weight: 800;
+  letter-spacing: 4px; color: var(--accent-h);
+  background: var(--accent-dim); border: 2px solid var(--accent);
+  border-radius: var(--r); padding: 14px 24px;
+  cursor: pointer; transition: background var(--t), transform var(--t);
+  user-select: all; width: 100%;
+}
+.id-reveal-box:hover { background: rgba(94,129,244,.2); transform: scale(1.02); }
+.id-reveal-box.copied { background: rgba(62,207,142,.15); border-color: var(--online); color: var(--online); }
+.id-reveal-box.copied::after { content: " ✓"; }
+
+.id-reveal-warning {
+  background: rgba(255,169,77,.1); border: 1px solid rgba(255,169,77,.3);
+  border-radius: var(--r); padding: 12px 16px;
+  font-size: 13px; color: var(--warn); line-height: 1.6;
+  width: 100%;
+}

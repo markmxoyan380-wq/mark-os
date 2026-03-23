@@ -67,12 +67,7 @@ const SocketEngine = (function () {
       State.dispatch("theme", user.theme || "dark");
       // Показываем MARK ID при первом входе
       if (user.friendId) UI.showToast(`Ваш ID: ${user.friendId} (нажмите чтобы скопировать)`, "success");
-      const rm = new Map(); rooms.forEach(r => rm.set(r.id, r));
-      State.dispatch("rooms", rm);
-      const um = new Map(); users.forEach(u => um.set(u.id, u));
-      State.dispatch("users", um);
-      State.dispatch("screen", "chat");
-      socket.emit("join_room", { roomId: "global" });
+      // (обработка в _finishLogin)
     });
 
     socket.on("auth_error", ({ message }) => UI.showToast(message, "error"));
@@ -969,6 +964,34 @@ const AppController = (function () {
     _bindState();
     _bindLogin();
     setInterval(() => { if (State.getState("screen") === "chat") SocketEngine.ping(); }, 5000);
+  }
+
+  function _showIdReveal(friendId, onContinue) {
+    // Показываем экран с MARK ID
+    const loginCard = document.querySelector(".login-card");
+    const revealScreen = document.getElementById("id-reveal-screen");
+    if (loginCard)    loginCard.classList.add("hidden");
+    if (revealScreen) {
+      revealScreen.classList.remove("hidden");
+      document.getElementById("id-reveal-value").textContent = friendId;
+      document.getElementById("id-reveal-ok").onclick = () => {
+        revealScreen.classList.add("hidden");
+        onContinue();
+      };
+    } else {
+      onContinue();
+    }
+  }
+
+  function _finishLogin(user, rooms, users) {
+    const rm = new Map(); rooms.forEach(r => rm.set(r.id, r));
+    State.dispatch("rooms", rm);
+    const um = new Map(); users.forEach(u => um.set(u.id, u));
+    State.dispatch("users", um);
+    State.dispatch("screen", "chat");
+    SocketEngine.joinRoom("global");
+    // Сохраняем ID в localStorage для подсказки при следующем входе
+    if (user.friendId) localStorage.setItem("markos_last_id", user.friendId);
   }
 
   function _bindState() {
