@@ -1,15 +1,17 @@
 {
-  "name": "mark-os",
+  "name": "mark-os-messenger",
   "version": "1.0.0",
-  "description": "MARK OS — Hybrid Telegram/WhatsApp messenger core",
+  "description": "MARK OS \u2014 Hybrid Telegram/WhatsApp messenger core",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "node --watch server.js"
+    "dev": "node --watch server.js",
+    "build": "npm install"
   },
   "dependencies": {
     "socket.io": "^4.7.5",
-    "uuid": "^9.0.1"
+    "uuid": "^9.0.1",
+    "better-sqlite3": "^9.4.3"
   },
   "engines": {
     "node": ">=18.0.0"

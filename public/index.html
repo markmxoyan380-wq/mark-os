@@ -48,11 +48,17 @@
     <!-- Истории -->
     <div id="stories-bar" class="stories-bar"></div>
 
-    <!-- Кнопка создать группу -->
-    <button id="create-group-btn" class="create-group-btn" onclick="GroupModal.show()">
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-      Новая группа
-    </button>
+    <!-- Кнопки создания -->
+    <div class="create-btns-row">
+      <button class="create-btn" onclick="GroupModal.show()">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        Группа
+      </button>
+      <button class="create-btn" id="create-channel-btn" onclick="ChannelModal.show()">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        Канал
+      </button>
+    </div>
 
     <div id="chat-list" class="chat-list"></div>
 
@@ -63,7 +69,7 @@
       </button>
       <button class="lp-tab" id="tab-contacts" onclick="LP.show('contacts')">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
-        <span>Люди</span>
+        <span>Друзья</span>
       </button>
       <button class="lp-tab" id="tab-profile" onclick="LP.show('profile')">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
@@ -94,6 +100,7 @@
           <div id="chat-header-status"></div>
         </div>
         <div style="display:flex;gap:4px;align-items:center">
+          <button class="icon-btn" id="friend-notif-btn" onclick="LP.show('contacts')" title="Запросы в друзья" style="display:none">🔔<span id="friend-notif-count" class="notif-badge">0</span></button>
           <span id="latency-display" class="latency-display good"></span>
           <button class="icon-btn" onclick="UI.showProfile()" title="Профиль">👤</button>
         </div>
@@ -156,9 +163,21 @@
 <!-- CONTACTS PANEL -->
 <div id="contacts-panel" class="side-panel hidden">
   <div class="sp-header">
-    <h2>Люди онлайн</h2>
+    <h2>Друзья</h2>
     <span id="online-count" class="online-badge">0</span>
   </div>
+
+  <!-- Добавить друга по ID -->
+  <div class="add-friend-wrap">
+    <input id="friend-id-input" type="text" placeholder="ID друга (напр. MARK-AB3D)" maxlength="9"/>
+    <button id="add-friend-btn" class="add-friend-btn">Добавить</button>
+  </div>
+
+  <!-- Входящие запросы -->
+  <div id="friend-requests" class="friend-requests"></div>
+
+  <!-- Список друзей -->
+  <div class="sp-section-label">Онлайн</div>
   <div id="user-list" class="user-list"></div>
 </div>
 
@@ -177,6 +196,9 @@
       </div>
       <div id="profile-name" class="profile-name"></div>
       <div id="profile-role" class="profile-role"></div>
+      <div class="friend-id-display">
+        Ваш ID: <span id="profile-friend-id" class="friend-id-value" title="Нажми чтобы скопировать" onclick="navigator.clipboard.writeText(this.textContent).then(()=>UI.showToast('ID скопирован','success'))"></span>
+      </div>
       <div class="profile-stat-row">
         <div class="stat-box"><span id="profile-msg-count">0</span><span>сообщений</span></div>
       </div>
@@ -185,6 +207,27 @@
         <textarea id="profile-bio-input" placeholder="Расскажите о себе..." maxlength="120" rows="3"></textarea>
       </div>
       <button id="profile-save-btn" class="btn-primary">Сохранить</button>
+    </div>
+  </div>
+</div>
+
+<!-- CHANNEL CREATE MODAL -->
+<div id="channel-modal" class="modal-overlay hidden" onclick="if(event.target===this)ChannelModal.hide()">
+  <div class="modal-card">
+    <div class="modal-header">
+      <h2>Новый канал</h2>
+      <button class="icon-btn" onclick="ChannelModal.hide()">✕</button>
+    </div>
+    <div class="profile-body">
+      <div class="profile-field">
+        <label>Название канала</label>
+        <input id="channel-name-input" type="text" placeholder="Например: Новости проекта..." maxlength="50" style="width:100%;background:var(--bg-input);border:1.5px solid var(--border-2);border-radius:var(--r);padding:10px 12px;font-size:14px;color:var(--text);"/>
+      </div>
+      <div class="profile-field">
+        <label>Описание (необязательно)</label>
+        <textarea id="channel-desc-input" placeholder="О чём этот канал..." maxlength="200" rows="2" style="width:100%;background:var(--bg-input);border:1.5px solid var(--border-2);border-radius:var(--r);padding:10px 12px;font-size:13px;color:var(--text);resize:none;"></textarea>
+      </div>
+      <button id="channel-create-btn" class="btn-primary">Создать канал</button>
     </div>
   </div>
 </div>
@@ -304,6 +347,47 @@ const StoryViewer = {
     document.getElementById("story-viewer-time").textContent   = mins < 60 ? `${mins} мин. назад` : `${Math.floor(mins/60)} ч. назад`;
   },
   hide() { document.getElementById("story-viewer").classList.add("hidden"); }
+};
+
+const AuthScreen = {
+  show(screen) {
+    document.getElementById("auth-choice").classList.add("hidden");
+    document.getElementById("auth-register").classList.add("hidden");
+    document.getElementById("auth-login").classList.add("hidden");
+    if (screen === "choice") {
+      document.getElementById("auth-choice").classList.remove("hidden");
+    } else if (screen === "register") {
+      document.getElementById("auth-register").classList.remove("hidden");
+      document.getElementById("reg-username")?.focus();
+    } else if (screen === "login") {
+      document.getElementById("auth-login").classList.remove("hidden");
+      document.getElementById("login-friend-id")?.focus();
+    }
+  }
+};
+
+// Авто-формат MARK-ID при вводе
+document.getElementById("login-friend-id")?.addEventListener("input", function() {
+  let v = this.value.toUpperCase().replace(/[^A-Z0-9-]/g, "");
+  if (v.length > 4 && !v.startsWith("MARK-")) v = "MARK-" + v.replace("MARK", "");
+  this.value = v;
+});
+
+const ChannelModal = {
+  show() {
+    const me = State.getState("currentUser");
+    if (!me || !me.isAdmin) { UI.showToast("Только администратор может создавать каналы", "error"); return; }
+    document.getElementById("channel-modal").classList.remove("hidden");
+    document.getElementById("channel-create-btn").onclick = () => this.create();
+  },
+  hide() { document.getElementById("channel-modal").classList.add("hidden"); },
+  create() {
+    const name = document.getElementById("channel-name-input").value.trim();
+    const desc = document.getElementById("channel-desc-input").value.trim();
+    if (name.length < 2) { UI.showToast("Введите название канала", "error"); return; }
+    SocketEngine.createChannel(name, desc);
+    this.hide();
+  }
 };
 
 function _strColor(str) {

@@ -43,7 +43,7 @@ const State = createStateManager({
   editingMsg:     null,   // { id, text }
   theme:          "dark",
   msgCount:       0,
-  loginAvatarUrl: null,
+  friendRequests: [], // входящие запросы
 });
 
 // ============================================================
@@ -65,6 +65,8 @@ const SocketEngine = (function () {
     socket.on("auth_success", ({ user, rooms, users }) => {
       State.dispatch("currentUser", user);
       State.dispatch("theme", user.theme || "dark");
+      // Показываем MARK ID при первом входе
+      if (user.friendId) UI.showToast(`Ваш ID: ${user.friendId} (нажмите чтобы скопировать)`, "success");
       const rm = new Map(); rooms.forEach(r => rm.set(r.id, r));
       State.dispatch("rooms", rm);
       const um = new Map(); users.forEach(u => um.set(u.id, u));
@@ -149,6 +151,35 @@ const SocketEngine = (function () {
       UI.showToast(`Группа "${room.name}" создана`, "success");
     });
 
+    socket.on("channel_created", ({ room }) => {
+      State.dispatch("rooms", prev => { const n = new Map(prev); n.set(room.id, room); return n; });
+      UI.showToast(`Канал "${room.name}" создан`, "success");
+    });
+
+    socket.on("friend_request", ({ from }) => {
+      State.dispatch("friendRequests", prev => [...prev, from]);
+      UI.renderFriendRequests();
+      UI.showToast(`${from.username} хочет добавить вас в друзья`, "dm");
+      // Показываем колокольчик
+      const btn = document.getElementById("friend-notif-btn");
+      const cnt = document.getElementById("friend-notif-count");
+      if (btn) btn.style.display = "flex";
+      if (cnt) cnt.textContent = State.getState("friendRequests").length;
+    });
+
+    socket.on("friend_request_sent", ({ to }) => {
+      UI.showToast(`Запрос отправлен ${to.username}`, "success");
+    });
+
+    socket.on("friend_accepted", ({ user }) => {
+      UI.showToast(`${user.username} теперь ваш друг! 🎉`, "success");
+      State.dispatch("users", prev => { const n = new Map(prev); n.set(user.id, user); return n; });
+    });
+
+    socket.on("friend_declined", ({ byUsername }) => {
+      UI.showToast(`${byUsername} отклонил запрос`, "info");
+    });
+
     socket.on("added_to_group", ({ room, by }) => {
       State.dispatch("rooms", prev => { const n = new Map(prev); n.set(room.id, room); return n; });
       UI.showToast(`${by.username} добавил вас в группу "${room.name}"`, "info");
@@ -189,7 +220,8 @@ const SocketEngine = (function () {
     new Notification(`MARK OS — ${msg.author}`, { body: msg.text || "📎 Медиа", icon: "/favicon.ico" });
   }
 
-  function auth(username, avatarUrl)             { socket?.emit("auth", { username, avatarUrl }); }
+  function register(username, password)          { socket?.emit("register", { username, password }); }
+  function login(friendId, password)             { socket?.emit("login", { friendId, password }); }
   function sendMessage(roomId, text, meta)        { socket?.emit("send_message", { roomId, text, mediaUrl: meta?.mediaUrl || null, mediaType: meta?.mediaType || null, replyToId: meta?.replyToId || null }); }
   function editMessage(roomId, messageId, text)   { socket?.emit("edit_message", { roomId, messageId, newText: text }); }
   function deleteMessage(roomId, messageId)        { socket?.emit("delete_message", { roomId, messageId }); }
@@ -202,7 +234,12 @@ const SocketEngine = (function () {
   function updateProfile(data)                     { socket?.emit("update_profile", data); }
   function createGroup(name, memberIds)            { socket?.emit("create_group", { name, memberIds }); }
 
-  return { connect, auth, sendMessage, editMessage, deleteMessage, reactMessage, joinRoom, openDM, typingStart, typingStop, ping, updateProfile, createGroup };
+  function addFriend(friendId)              { socket?.emit("add_friend", { friendId }); }
+  function acceptFriend(fromUserId)         { socket?.emit("accept_friend", { fromUserId }); }
+  function declineFriend(fromUserId)        { socket?.emit("decline_friend", { fromUserId }); }
+  function createChannel(name, description) { socket?.emit("create_channel", { name, description }); }
+
+  return { connect, register, login, sendMessage, editMessage, deleteMessage, reactMessage, joinRoom, openDM, typingStart, typingStop, ping, updateProfile, createGroup, addFriend, acceptFriend, declineFriend, createChannel };
 })();
 
 // ============================================================
@@ -307,6 +344,7 @@ const UI = (function () {
         const preview = lastMsg ? `${lastMsg.author}: ${lastMsg.text || "📎"}`.slice(0, 50) : "Нет сообщений";
         const timeStr = lastMsg ? _fmtTime(lastMsg.timestamp) : "";
         const icon    = room.type === "global" ? "🌐" : room.type === "channel" ? "📢" : room.type === "group" ? "👥" : "💬";
+        const sections_map = { global: "Основное", channel: "Каналы", group: "Группы", dm: "Переписки" };
 
         const el = document.createElement("div");
         el.className = "chat-item" + (room.id === activeRoomId ? " active" : "");
@@ -331,6 +369,33 @@ const UI = (function () {
   function _avatarHTML(user, size = 36) {
     if (user.avatarUrl) return `<img src="${_esc(user.avatarUrl)}" style="width:${size}px;height:${size}px;object-fit:cover;border-radius:50%;flex-shrink:0" />`;
     return `<div class="user-av" style="background:${user.avatarColor || _color(user.username)};width:${size}px;height:${size}px">${_esc(user.avatar)}</div>`;
+  }
+
+  function renderFriendRequests() {
+    const requests = State.getState("friendRequests");
+    const el       = document.getElementById("friend-requests");
+    if (!el) return;
+    el.innerHTML = "";
+    if (!requests.length) return;
+
+    requests.forEach(from => {
+      const item = document.createElement("div");
+      item.className = "friend-request-item";
+      item.innerHTML = `
+        <div class="user-av" style="background:${from.avatarUrl ? "transparent" : _color(from.username)}">
+          ${from.avatarUrl ? `<img src="${_esc(from.avatarUrl)}" style="width:100%;height:100%;object-fit:cover;border-radius:50%"/>` : _esc(from.avatar)}
+        </div>
+        <div class="user-info">
+          <div class="user-name">${_esc(from.username)}</div>
+          <div style="font-size:11px;color:var(--text-3)">хочет добавить в друзья</div>
+        </div>
+        <div style="display:flex;gap:6px">
+          <button class="accept-btn" onclick="SocketEngine.acceptFriend('${from.id}');this.closest('.friend-request-item').remove()">✓</button>
+          <button class="decline-btn" onclick="SocketEngine.declineFriend('${from.id}');this.closest('.friend-request-item').remove()">✕</button>
+        </div>
+      `;
+      el.appendChild(item);
+    });
   }
 
   function renderStoriesBar() {
@@ -541,6 +606,8 @@ const UI = (function () {
     if ($.profileRole)     $.profileRole.textContent     = user.isAdmin ? "👑 Администратор" : "👤 Участник";
     if ($.profileBioInput) $.profileBioInput.value       = user.bio || "";
     if ($.profileMsgCount) $.profileMsgCount.textContent = State.getState("msgCount");
+    const friendIdEl = document.getElementById("profile-friend-id");
+    if (friendIdEl && user.friendId) friendIdEl.textContent = user.friendId;
     const storyInput = document.getElementById("profile-story-input");
     if (storyInput) storyInput.value = user.story?.text || "";
   }
@@ -768,6 +835,18 @@ const UI = (function () {
     // Запросить разрешение на уведомления
     requestNotifPermission();
 
+    // Добавить друга по ID
+    document.getElementById("add-friend-btn")?.addEventListener("click", () => {
+      const input = document.getElementById("friend-id-input");
+      const id    = (input?.value || "").trim().toUpperCase();
+      if (!id) { showToast("Введите ID друга", "error"); return; }
+      SocketEngine.addFriend(id);
+      if (input) input.value = "";
+    });
+    document.getElementById("friend-id-input")?.addEventListener("keydown", e => {
+      if (e.key === "Enter") document.getElementById("add-friend-btn")?.click();
+    });
+
     // Аватар в профиле
     const profileAvatarInput = document.getElementById("profile-avatar-input");
     profileAvatarInput?.addEventListener("change", e => {
@@ -825,7 +904,7 @@ const UI = (function () {
     renderChatList, renderUserList, renderMessages, renderTyping,
     updateHeader, showReplyBar, hideReplyBar, showEditBar, hideEditBar,
     showProfile, hideProfile, openMedia, hideCtxMenu,
-    showToast, updateLatency, markRoomUnread, playPing, renderStoriesBar,
+    showToast, updateLatency, markRoomUnread, playPing, renderStoriesBar, renderFriendRequests,
   };
 })();
 
