@@ -768,22 +768,6 @@ const UI = (function () {
     // Запросить разрешение на уведомления
     requestNotifPermission();
 
-    // Аватар на экране входа
-    const loginAvatarInput   = document.getElementById("login-avatar-input");
-    const loginAvatarPreview = document.getElementById("login-avatar-preview");
-    loginAvatarInput?.addEventListener("change", e => {
-      const file = e.target.files[0];
-      if (!file) return;
-      const reader = new FileReader();
-      reader.onload = ev => {
-        State.dispatch("loginAvatarUrl", ev.target.result);
-        if (loginAvatarPreview) {
-          loginAvatarPreview.innerHTML = `<img src="${ev.target.result}" style="width:100%;height:100%;object-fit:cover;border-radius:50%"/>`;
-        }
-      };
-      reader.readAsDataURL(file);
-    });
-
     // Аватар в профиле
     const profileAvatarInput = document.getElementById("profile-avatar-input");
     profileAvatarInput?.addEventListener("change", e => {
@@ -881,7 +865,6 @@ const AppController = (function () {
       return;
     }
     const btn       = document.getElementById("login-btn");
-    const avatarUrl = State.getState("loginAvatarUrl");
     if (btn) { btn.disabled = true; btn.querySelector("span").textContent = "Подключение..."; }
 
     SocketEngine.connect();
@@ -889,7 +872,7 @@ const AppController = (function () {
       const s = State.getState("connectionStatus");
       if (s === "connected") {
         clearInterval(check);
-        SocketEngine.auth(username, avatarUrl);
+        SocketEngine.auth(username);
         if (btn) { btn.disabled = false; btn.querySelector("span").textContent = "Начать"; }
       }
       if (s === "disconnected") {
