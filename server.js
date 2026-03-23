@@ -8,30 +8,29 @@ const path    = require("path");
 const fs      = require("fs");
 const crypto  = require("crypto");
 const { v4: uuidv4 } = require("uuid");
-const Database = require("better-sqlite3");
 
 const PORT          = process.env.PORT || 3000;
 const MAX_HISTORY   = 100;
 const TYPING_EXPIRE = 4000;
 
-// ── БАЗА ДАННЫХ ──────────────────────────────────────────────
-const DB_PATH = path.join(__dirname, "markos.db");
-const db = new Database(DB_PATH);
+// ── БАЗА ДАННЫХ (встроенный JSON файл) ──────────────────────
+// Используем простое JSON-хранилище вместо SQLite
+// для максимальной совместимости с любым хостингом
+const DB_PATH = path.join(__dirname, "markos_db.json");
 
-db.exec(`
-  CREATE TABLE IF NOT EXISTS accounts (
-    id          TEXT PRIMARY KEY,
-    friend_id   TEXT UNIQUE NOT NULL,
-    username    TEXT NOT NULL,
-    password    TEXT NOT NULL,
-    bio         TEXT DEFAULT "",
-    avatar_url  TEXT DEFAULT NULL,
-    avatar_color TEXT DEFAULT NULL,
-    theme       TEXT DEFAULT "dark",
-    created_at  INTEGER NOT NULL,
-    last_seen   INTEGER NOT NULL
-  );
-`);
+function loadDB() {
+  try {
+    if (fs.existsSync(DB_PATH)) return JSON.parse(fs.readFileSync(DB_PATH, "utf8"));
+  } catch(e) {}
+  return { accounts: {} };
+}
+
+function saveDB() {
+  try { fs.writeFileSync(DB_PATH, JSON.stringify(db, null, 2)); } catch(e) {}
+}
+
+let db = loadDB();
+if (!db.accounts) db.accounts = {};
 
 // ── IN-MEMORY ────────────────────────────────────────────────
 const Store = {
@@ -103,12 +102,13 @@ io.on("connection", (socket) => {
     const id   = friendId.trim().toUpperCase();
     const pass = password.trim();
 
-    const account = db.prepare("SELECT * FROM accounts WHERE friend_id = ?").get(id);
+    const account = Object.values(db.accounts).find(a => a.friend_id === id);
     if (!account) { socket.emit("auth_error", { message: `Аккаунт ${id} не найден` }); return; }
     if (account.password !== _hash(pass)) { socket.emit("auth_error", { message: "Неверный пароль" }); return; }
 
     // Обновляем last_seen
-    db.prepare("UPDATE accounts SET last_seen = ? WHERE id = ?").run(Date.now(), account.id);
+    account.last_seen = Date.now();
+    saveDB();
 
     _loginSocket(socket, account);
     console.log(`[Login] ${account.username} (${id})`);
@@ -190,10 +190,10 @@ io.on("connection", (socket) => {
   socket.on("update_profile", ({ bio, theme, avatarColor, avatarUrl, story }) => {
     const user = _getUser(socket.id);
     if (!user) return;
-    if (bio         !== undefined) { user.bio         = (bio || "").slice(0, 120); db.prepare("UPDATE accounts SET bio = ? WHERE id = ?").run(user.bio, user.id); }
-    if (theme       !== undefined) { user.theme        = theme; db.prepare("UPDATE accounts SET theme = ? WHERE id = ?").run(theme, user.id); }
-    if (avatarColor !== undefined) { user.avatarColor  = avatarColor; db.prepare("UPDATE accounts SET avatar_color = ? WHERE id = ?").run(avatarColor, user.id); }
-    if (avatarUrl   !== undefined) { user.avatarUrl    = avatarUrl; db.prepare("UPDATE accounts SET avatar_url = ? WHERE id = ?").run(avatarUrl, user.id); }
+    if (bio         !== undefined) { user.bio         = (bio || "").slice(0, 120); if (db.accounts[user.id]) { db.accounts[user.id].bio = user.bio; saveDB(); } }
+    if (theme       !== undefined) { user.theme        = theme; if (db.accounts[user.id]) { db.accounts[user.id].theme = theme; saveDB(); } }
+    if (avatarColor !== undefined) { user.avatarColor  = avatarColor; if (db.accounts[user.id]) { db.accounts[user.id].avatar_color = avatarColor; saveDB(); } }
+    if (avatarUrl   !== undefined) { user.avatarUrl    = avatarUrl; if (db.accounts[user.id]) { db.accounts[user.id].avatar_url = avatarUrl; saveDB(); } }
     if (story       !== undefined) user.story = story ? { text: story, ts: Date.now() } : null;
     socket.emit("profile_updated", { user: publicUser(user) });
     socket.broadcast.emit("user_updated", { user: publicUser(user) });
@@ -210,8 +210,8 @@ io.on("connection", (socket) => {
     });
     // Ищем офлайн в БД
     if (!target) {
-      const acc = db.prepare("SELECT * FROM accounts WHERE friend_id = ?").get(friendId.toUpperCase());
-      if (acc) { socket.emit("friend_request_sent", { to: { username: acc.username, friendId: acc.friend_id } }); socket.emit("info_event", { message: `${acc.username} офлайн, запрос будет доставлен при входе` }); return; }
+      const acc = Object.values(db.accounts).find(a => a.friend_id === friendId.toUpperCase());
+      if (acc) { socket.emit("friend_request_sent", { to: { username: acc.username, friendId: acc.friend_id } }); UI && socket.emit("info_event", { message: `${acc.username} офлайн` }); return; }
     }
     if (!target) { socket.emit("error_event", { message: `Пользователь ${friendId} не найден` }); return; }
     if (target.id === me.id) { socket.emit("error_event", { message: "Нельзя добавить себя" }); return; }
@@ -378,7 +378,7 @@ io.on("connection", (socket) => {
     Store.userIndex.delete(user.id);
     Store.sessions.delete(socket.id);
     Store.rooms.forEach(r => r.members.delete(socket.id));
-    db.prepare("UPDATE accounts SET last_seen = ? WHERE id = ?").run(Date.now(), user.id);
+    if (db.accounts[user.id]) { db.accounts[user.id].last_seen = Date.now(); saveDB(); }
     io.emit("user_left", { userId: user.id, username: user.username });
   });
 });
@@ -386,7 +386,7 @@ io.on("connection", (socket) => {
 // ── HELPERS ──────────────────────────────────────────────────
 function _loginSocket(socket, account, isNew = false) {
   // Считаем кол-во аккаунтов для определения первого admin
-  const count   = db.prepare("SELECT COUNT(*) as c FROM accounts").get().c;
+  const count   = Object.keys(db.accounts).length;
   const isAdmin = count <= 1;
 
   const user = {
@@ -468,7 +468,7 @@ function _genFriendId() {
   let id = "MARK-";
   for (let i = 0; i < 4; i++) id += chars[Math.floor(Math.random() * chars.length)];
   // Проверяем уникальность
-  const exists = db.prepare("SELECT id FROM accounts WHERE friend_id = ?").get(id);
+  const exists = Object.values(db.accounts).find(a => a.friend_id === id);
   return exists ? _genFriendId() : id;
 }
 
