@@ -151,6 +151,39 @@ const SocketEngine = (function () {
       UI.showToast(`Группа "${room.name}" создана`, "success");
     });
 
+    socket.on("group_members", ({ groupId, members }) => {
+      if (typeof GroupMembers !== "undefined") GroupMembers.render(members);
+    });
+
+    socket.on("group_member_joined", ({ groupId, user }) => {
+      UI.showToast(`${user.username} вступил в группу`, "info");
+    });
+
+    socket.on("group_member_left", ({ groupId, userId }) => {
+      const users = State.getState("users");
+      const u = users.get(userId);
+      if (u) UI.showToast(`${u.username} покинул группу`, "info");
+    });
+
+    socket.on("kicked_from_group", ({ groupId, groupName }) => {
+      UI.showToast(`Вас удалили из группы "${groupName}"`, "error");
+      State.dispatch("rooms", prev => { const n = new Map(prev); n.delete(groupId); return n; });
+      if (State.getState("activeRoomId") === groupId) {
+        State.dispatch("activeRoomId", "global");
+        AppController.switchRoom("global");
+      }
+    });
+
+    socket.on("left_group", ({ groupId }) => {
+      State.dispatch("rooms", prev => { const n = new Map(prev); n.delete(groupId); return n; });
+    });
+
+    socket.on("group_updated", ({ groupId, action, username }) => {
+      const msg = action === "added" ? `${username} добавлен в группу` : `${username} удалён из группы`;
+      UI.showToast(msg, "success");
+      SocketEngine.getGroupMembers(groupId);
+    });
+
     socket.on("channel_created", ({ room }) => {
       State.dispatch("rooms", prev => { const n = new Map(prev); n.set(room.id, room); return n; });
       UI.showToast(`Канал "${room.name}" создан`, "success");
@@ -235,11 +268,15 @@ const SocketEngine = (function () {
   function createGroup(name, memberIds)            { socket?.emit("create_group", { name, memberIds }); }
 
   function addFriend(friendId)              { socket?.emit("add_friend", { friendId }); }
+  function kickFromGroup(groupId, targetUserId) { socket?.emit("kick_from_group", { groupId, targetUserId }); }
+  function addToGroup(groupId, targetUserId)    { socket?.emit("add_to_group", { groupId, targetUserId }); }
+  function leaveGroup(groupId)                  { socket?.emit("leave_group", { groupId }); }
+  function getGroupMembers(groupId)             { socket?.emit("get_group_members", { groupId }); }
   function acceptFriend(fromUserId)         { socket?.emit("accept_friend", { fromUserId }); }
   function declineFriend(fromUserId)        { socket?.emit("decline_friend", { fromUserId }); }
   function createChannel(name, description) { socket?.emit("create_channel", { name, description }); }
 
-  return { connect, register, login, sendMessage, editMessage, deleteMessage, reactMessage, joinRoom, openDM, typingStart, typingStop, ping, updateProfile, createGroup, addFriend, acceptFriend, declineFriend, createChannel };
+  return { connect, register, login, sendMessage, editMessage, deleteMessage, reactMessage, joinRoom, openDM, typingStart, typingStop, ping, updateProfile, createGroup, addFriend, acceptFriend, declineFriend, createChannel, kickFromGroup, addToGroup, leaveGroup, getGroupMembers };
 })();
 
 // ============================================================
@@ -485,10 +522,20 @@ const UI = (function () {
 
       const reactHTML = _renderReactions(msg, roomId);
 
+      // Данные автора для клика
+      const authorData = JSON.stringify({
+        id: msg.authorId, username: msg.author,
+        avatar: msg.avatar, avatarUrl: msg.avatarUrl || null,
+        avatarColor: msg.avatarColor || null,
+        isAdmin: msg.isAdmin,
+      }).replace(/"/g, "&quot;");
+
+      const avatarClick = `onclick="if(typeof UserProfile!=='undefined')UserProfile.show(JSON.parse(this.dataset.user))" style="cursor:pointer" data-user="${authorData}"`;
+
       const avatarHTML = compact ? `<div class="msg-av-spacer"></div>` : (
         msg.avatarUrl
-          ? `<img src="${_esc(msg.avatarUrl)}" style="width:32px;height:32px;border-radius:50%;object-fit:cover;flex-shrink:0;align-self:flex-end" />`
-          : `<div class="msg-av" style="background:${msg.avatarColor || _color(msg.author)}">${_esc(msg.avatar)}</div>`
+          ? `<img src="${_esc(msg.avatarUrl)}" ${avatarClick} style="width:32px;height:32px;border-radius:50%;object-fit:cover;flex-shrink:0;align-self:flex-end" />`
+          : `<div class="msg-av" ${avatarClick} style="background:${msg.avatarColor || _color(msg.author)}">${_esc(msg.avatar)}</div>`
       );
 
       el.innerHTML = `
@@ -549,6 +596,10 @@ const UI = (function () {
     if ($.activeChat)   $.activeChat.classList.remove("hidden");
     if ($.rightPanel)   $.rightPanel.classList.add("visible-mobile");
     if ($.leftPanel)    $.leftPanel.classList.add("hidden-mobile");
+
+    // Показываем кнопку участников для групп
+    const gmBtn = document.getElementById("group-members-btn");
+    if (gmBtn) gmBtn.style.display = room.type === "group" ? "flex" : "none";
 
     const me = State.getState("currentUser");
     const ro = room.type === "channel" && (!me || !me.isAdmin);

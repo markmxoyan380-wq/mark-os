@@ -100,6 +100,7 @@
           <div id="chat-header-status"></div>
         </div>
         <div style="display:flex;gap:4px;align-items:center">
+          <button class="icon-btn" id="group-members-btn" onclick="GroupMembers.show()" title="Участники группы" style="display:none">👥</button>
           <button class="icon-btn" id="friend-notif-btn" onclick="LP.show('contacts')" title="Запросы в друзья" style="display:none">🔔<span id="friend-notif-count" class="notif-badge">0</span></button>
           <span id="latency-display" class="latency-display good"></span>
           <button class="icon-btn" onclick="UI.showProfile()" title="Профиль">👤</button>
@@ -264,6 +265,45 @@
   </div>
 </div>
 
+<!-- USER PROFILE VIEWER -->
+<div id="user-profile-modal" class="modal-overlay hidden" onclick="if(event.target===this)UserProfile.hide()">
+  <div class="modal-card">
+    <div class="modal-header">
+      <h2>Профиль</h2>
+      <button class="icon-btn" onclick="UserProfile.hide()">✕</button>
+    </div>
+    <div class="profile-body">
+      <div id="up-avatar" class="profile-avatar"></div>
+      <div id="up-name" class="profile-name"></div>
+      <div id="up-id" class="friend-id-display">ID: <span class="friend-id-value"></span></div>
+      <div id="up-role" class="profile-role"></div>
+      <div id="up-bio" style="font-size:13px;color:var(--text-2);text-align:center;max-width:240px;"></div>
+      <div id="up-story" class="up-story hidden"></div>
+      <div style="display:flex;gap:10px;margin-top:8px">
+        <button id="up-dm-btn" class="btn-primary" style="flex:1">💬 Написать</button>
+        <button id="up-add-btn" class="btn-secondary" style="flex:1">➕ В друзья</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- GROUP MEMBERS MODAL -->
+<div id="group-members-modal" class="modal-overlay hidden" onclick="if(event.target===this)GroupMembers.hide()">
+  <div class="modal-card">
+    <div class="modal-header">
+      <h2 id="gm-title">Участники</h2>
+      <button class="icon-btn" onclick="GroupMembers.hide()">✕</button>
+    </div>
+    <div id="gm-list" class="user-list" style="max-height:400px;overflow-y:auto;padding:8px"></div>
+    <div style="padding:12px 16px;border-top:1px solid var(--border)">
+      <button class="btn-secondary" style="width:100%" onclick="GroupMembers.showAddPanel()">➕ Добавить участника</button>
+    </div>
+    <div id="gm-add-panel" class="hidden" style="padding:12px 16px;border-top:1px solid var(--border)">
+      <div id="gm-add-list" class="user-list" style="max-height:200px;overflow-y:auto"></div>
+    </div>
+  </div>
+</div>
+
 <!-- CONTEXT MENU -->
 <div id="context-menu" class="context-menu hidden"></div>
 
@@ -347,6 +387,111 @@ const StoryViewer = {
     document.getElementById("story-viewer-time").textContent   = mins < 60 ? `${mins} мин. назад` : `${Math.floor(mins/60)} ч. назад`;
   },
   hide() { document.getElementById("story-viewer").classList.add("hidden"); }
+};
+
+// Просмотр профиля пользователя
+const UserProfile = {
+  _user: null,
+  show(user) {
+    this._user = user;
+    const modal = document.getElementById("user-profile-modal");
+    modal.classList.remove("hidden");
+    const av = document.getElementById("up-avatar");
+    if (user.avatarUrl) {
+      av.innerHTML = `<img src="${user.avatarUrl}" style="width:100%;height:100%;object-fit:cover;border-radius:50%"/>`;
+      av.style.background = "transparent";
+    } else {
+      av.innerHTML = user.avatar;
+      av.style.background = _strColor(user.username);
+    }
+    document.getElementById("up-name").textContent   = user.username;
+    document.getElementById("up-id").querySelector(".friend-id-value").textContent = user.friendId || "—";
+    document.getElementById("up-role").textContent   = user.isAdmin ? "👑 Администратор" : "👤 Участник";
+    document.getElementById("up-bio").textContent    = user.bio || "";
+    const storyEl = document.getElementById("up-story");
+    if (user.story) {
+      storyEl.textContent = "📖 " + user.story.text;
+      storyEl.classList.remove("hidden");
+    } else {
+      storyEl.classList.add("hidden");
+    }
+    document.getElementById("up-dm-btn").onclick = () => {
+      SocketEngine.openDM(user.id);
+      UserProfile.hide();
+    };
+    document.getElementById("up-add-btn").onclick = () => {
+      if (user.friendId) SocketEngine.addFriend(user.friendId);
+      UserProfile.hide();
+    };
+  },
+  hide() { document.getElementById("user-profile-modal").classList.add("hidden"); }
+};
+
+// Управление участниками группы
+const GroupMembers = {
+  _groupId: null,
+  show() {
+    const roomId = State.getState("activeRoomId");
+    const room   = State.getState("rooms").get(roomId);
+    if (!room || room.type !== "group") return;
+    this._groupId = roomId;
+    document.getElementById("group-members-modal").classList.remove("hidden");
+    document.getElementById("gm-title").textContent = `👥 ${room.name}`;
+    SocketEngine.getGroupMembers(roomId);
+  },
+  hide() { document.getElementById("group-members-modal").classList.add("hidden"); },
+  render(members) {
+    const list = document.getElementById("gm-list");
+    const me   = State.getState("currentUser");
+    const room = State.getState("rooms").get(this._groupId);
+    const isCreator = me && room && room.creatorId === me.id;
+    list.innerHTML = "";
+    members.forEach(u => {
+      const isMe = me && u.id === me.id;
+      const el   = document.createElement("div");
+      el.className = "user-item";
+      const av = u.avatarUrl
+        ? `<img src="${u.avatarUrl}" style="width:36px;height:36px;object-fit:cover;border-radius:50%;flex-shrink:0"/>`
+        : `<div class="user-av" style="background:${_strColor(u.username)}">${u.avatar}</div>`;
+      el.innerHTML = `
+        ${av}
+        <div class="user-info" style="cursor:pointer" onclick="UserProfile.show(${JSON.stringify(u).replace(/"/g,'&quot;')})">
+          <div class="user-name">${u.username}${isMe ? " (ты)" : ""}</div>
+          ${u.isAdmin ? '<div class="admin-tag">ADMIN</div>' : ""}
+        </div>
+        ${isCreator && !isMe ? `<button class="decline-btn" onclick="GroupMembers.kick('${u.id}')" title="Удалить">✕</button>` : ""}
+      `;
+      list.appendChild(el);
+    });
+  },
+  kick(userId) {
+    if (!confirm("Удалить участника из группы?")) return;
+    SocketEngine.kickFromGroup(this._groupId, userId);
+  },
+  showAddPanel() {
+    const panel = document.getElementById("gm-add-panel");
+    panel.classList.toggle("hidden");
+    const addList = document.getElementById("gm-add-list");
+    addList.innerHTML = "";
+    const users = State.getState("users");
+    const me    = State.getState("currentUser");
+    users.forEach(u => {
+      if (me && u.id === me.id) return;
+      const el = document.createElement("div");
+      el.className = "user-item";
+      el.style.cursor = "pointer";
+      const av = u.avatarUrl
+        ? `<img src="${u.avatarUrl}" style="width:36px;height:36px;object-fit:cover;border-radius:50%;flex-shrink:0"/>`
+        : `<div class="user-av" style="background:${_strColor(u.username)}">${u.avatar}</div>`;
+      el.innerHTML = `${av}<div class="user-info"><div class="user-name">${u.username}</div></div><span style="color:var(--accent-h)">+ Добавить</span>`;
+      el.addEventListener("click", () => {
+        SocketEngine.addToGroup(this._groupId, u.id);
+        el.style.opacity = "0.4";
+        el.style.pointerEvents = "none";
+      });
+      addList.appendChild(el);
+    });
+  }
 };
 
 const AuthScreen = {

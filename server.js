@@ -291,6 +291,68 @@ io.on("connection", (socket) => {
     if (tSock) tSock.emit("dm_incoming", { room: { id: dmId, type: "dm", name: `💬 ${me.username}` }, from: publicUser(me) });
   });
 
+
+  // ДОБАВИТЬ В ГРУППУ
+  socket.on("add_to_group", ({ groupId, targetUserId }) => {
+    const user  = _getUser(socket.id);
+    const room  = Store.rooms.get(groupId);
+    if (!user || !room || room.type !== "group") return;
+    if (room.creatorId !== user.id && !user.isAdmin) {
+      socket.emit("permission_denied", { message: "Только создатель группы может добавлять участников" }); return;
+    }
+    const tSid  = Store.userIndex.get(targetUserId);
+    const tSock = tSid ? io.sockets.sockets.get(tSid) : null;
+    if (!tSock) { socket.emit("error_event", { message: "Пользователь офлайн" }); return; }
+    joinRoom(tSock, groupId);
+    tSock.emit("added_to_group", { room: { id: groupId, type: "group", name: room.name }, by: publicUser(user) });
+    tSock.emit("room_history", { roomId: groupId, messages: room.history });
+    io.to(groupId).emit("group_member_joined", { groupId, user: publicUser(_getUser(tSid)) });
+    socket.emit("group_updated", { groupId, action: "added", username: _getUser(tSid)?.username });
+  });
+
+  // УДАЛИТЬ ИЗ ГРУППЫ
+  socket.on("kick_from_group", ({ groupId, targetUserId }) => {
+    const user  = _getUser(socket.id);
+    const room  = Store.rooms.get(groupId);
+    if (!user || !room || room.type !== "group") return;
+    if (room.creatorId !== user.id && !user.isAdmin) {
+      socket.emit("permission_denied", { message: "Только создатель группы может удалять участников" }); return;
+    }
+    if (targetUserId === user.id) { socket.emit("error_event", { message: "Нельзя удалить себя" }); return; }
+    const tSid  = Store.userIndex.get(targetUserId);
+    const tSock = tSid ? io.sockets.sockets.get(tSid) : null;
+    if (tSock) {
+      tSock.leave(groupId);
+      room.members.delete(tSid);
+      tSock.emit("kicked_from_group", { groupId, groupName: room.name });
+    }
+    io.to(groupId).emit("group_member_left", { groupId, userId: targetUserId });
+    socket.emit("group_updated", { groupId, action: "kicked", username: _getUser(tSid)?.username });
+  });
+
+  // ПОКИНУТЬ ГРУППУ
+  socket.on("leave_group", ({ groupId }) => {
+    const user = _getUser(socket.id);
+    const room = Store.rooms.get(groupId);
+    if (!user || !room) return;
+    socket.leave(groupId);
+    room.members.delete(socket.id);
+    io.to(groupId).emit("group_member_left", { groupId, userId: user.id });
+    socket.emit("left_group", { groupId });
+  });
+
+  // ПОЛУЧИТЬ УЧАСТНИКОВ ГРУППЫ
+  socket.on("get_group_members", ({ groupId }) => {
+    const room = Store.rooms.get(groupId);
+    if (!room) return;
+    const members = [];
+    room.members.forEach(sid => {
+      const u = _getUser(sid);
+      if (u) members.push(publicUser(u));
+    });
+    socket.emit("group_members", { groupId, members });
+  });
+
   // TYPING
   socket.on("typing_start", ({ roomId }) => {
     const user = _getUser(socket.id);
